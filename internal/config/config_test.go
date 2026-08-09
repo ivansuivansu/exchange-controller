@@ -94,3 +94,18 @@ func TestLoadBacktestFromEnv(t *testing.T) {
 		t.Fatalf("unexpected backtest config: %+v", got)
 	}
 }
+
+func TestLoadNotifierFromEnv(t *testing.T) {
+	t.Setenv("NOTIFIER_ENABLED", "true")
+	t.Setenv("NOTIFIER_POLL_INTERVAL", "10s")
+	t.Setenv("NOTIFIER_WINDOW_SIZE", "6")
+	t.Setenv("NOTIFIER_DROP_THRESHOLD", "0.0036")
+	t.Setenv("NOTIFIER_COOLDOWN", "5m")
+	got, err := config.LoadNotifierFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Enabled || got.PollInterval != 10*time.Second || got.WindowSize != 6 || got.DropThreshold.String() != "0.0036" || got.Cooldown != 5*time.Minute {
+		t.Fatalf("notifier config=%+v", got)
+	}
+}

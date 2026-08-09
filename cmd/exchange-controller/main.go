@@ -22,12 +22,19 @@ import (
 	"github.com/ivansuivansu/exchange-controller/internal/execution"
 	"github.com/ivansuivansu/exchange-controller/internal/idea"
 	"github.com/ivansuivansu/exchange-controller/internal/market"
+	"github.com/ivansuivansu/exchange-controller/internal/notifier"
 	"github.com/ivansuivansu/exchange-controller/internal/planner"
 	signals "github.com/ivansuivansu/exchange-controller/internal/signal"
 	"github.com/ivansuivansu/exchange-controller/internal/telegram"
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "notify" {
+		if err := runNotifier(); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "backtest" {
 		if err := runBacktest(); err != nil {
 			log.Fatal(err)
@@ -41,6 +48,49 @@ func main() {
 		return
 	}
 	runDemo()
+}
+
+func runNotifier() error {
+	settings, err := config.LoadNotifierFromEnv()
+	if err != nil {
+		return err
+	}
+	if !settings.Enabled {
+		return fmt.Errorf("notifier is disabled; set NOTIFIER_ENABLED=true")
+	}
+	telegramConfig, err := config.LoadTelegramFromEnv()
+	if err != nil {
+		return err
+	}
+	ctx, stop := signalNotifyContext()
+	defer stop()
+	bot, err := telegram.NewBotAPI(telegramConfig.Token, nil)
+	if err != nil {
+		return err
+	}
+	monitor, err := notifier.New(notifier.Config{Market: cryptocom.BTCUSD, PollInterval: settings.PollInterval,
+		WindowSize: settings.WindowSize, DropThreshold: settings.DropThreshold, Cooldown: settings.Cooldown})
+	if err != nil {
+		return err
+	}
+	source, err := cryptocom.NewSource(cryptocom.Config{Market: cryptocom.BTCUSD, PollInterval: settings.PollInterval,
+		MaxAttempts: 3, RetryBackoff: time.Second})
+	if err != nil {
+		return err
+	}
+	handler := notifier.NewCommandHandler(monitor, bot, telegramConfig.AllowedUserIDs, telegramConfig.AllowedChatIDs)
+	errors := make(chan error, 2)
+	go func() { errors <- bot.Run(ctx, handler) }()
+	go func() {
+		errors <- (notifier.Service{Source: source, Monitor: monitor, Sender: bot, ChatID: telegramConfig.SendChatID}).Run(ctx)
+	}()
+	log.Printf("INFORMATION ONLY: BTC_USD decline notifier enabled; no trade can be created or executed")
+	select {
+	case err := <-errors:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func runBacktest() error {

@@ -65,7 +65,15 @@ type update struct {
 	} `json:"callback_query"`
 }
 
-func (b *BotAPI) Run(ctx context.Context, approver *Approver) error {
+type CommandHandler interface {
+	HandleCommand(context.Context, int64, int64, string) (string, error)
+}
+
+type CallbackHandler interface {
+	HandleCallback(context.Context, Callback) (CallbackResult, error)
+}
+
+func (b *BotAPI) Run(ctx context.Context, handler CommandHandler) error {
 	var offset int64
 	for {
 		if err := ctx.Err(); err != nil {
@@ -85,15 +93,18 @@ func (b *BotAPI) Run(ctx context.Context, approver *Approver) error {
 		for _, item := range result.Result {
 			offset = item.UpdateID + 1
 			if item.Message != nil {
-				_, _ = approver.HandleCommand(ctx, item.Message.From.ID, item.Message.Chat.ID, item.Message.Text)
+				_, _ = handler.HandleCommand(ctx, item.Message.From.ID, item.Message.Chat.ID, item.Message.Text)
 			}
 			if item.Callback != nil {
-				_, callbackErr := approver.HandleCallback(ctx, Callback{
-					UserID: item.Callback.From.ID, ChatID: item.Callback.Message.Chat.ID, Data: item.Callback.Data,
-				})
-				text := "Decision recorded"
-				if callbackErr != nil {
-					text = callbackErr.Error()
+				text := "Callbacks are not supported in this mode"
+				if callbackHandler, ok := handler.(CallbackHandler); ok {
+					_, callbackErr := callbackHandler.HandleCallback(ctx, Callback{
+						UserID: item.Callback.From.ID, ChatID: item.Callback.Message.Chat.ID, Data: item.Callback.Data,
+					})
+					text = "Decision recorded"
+					if callbackErr != nil {
+						text = callbackErr.Error()
+					}
 				}
 				_ = b.call(ctx, "answerCallbackQuery", map[string]any{"callback_query_id": item.Callback.ID, "text": text}, nil)
 			}

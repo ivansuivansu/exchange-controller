@@ -32,6 +32,41 @@ type Backtest struct {
 	AmbiguityPolicy string
 }
 
+type Notifier struct {
+	Enabled       bool
+	PollInterval  time.Duration
+	WindowSize    int
+	DropThreshold domain.Decimal
+	Cooldown      time.Duration
+}
+
+func LoadNotifierFromEnv() (Notifier, error) {
+	enabled, err := envBool("NOTIFIER_ENABLED", true)
+	if err != nil {
+		return Notifier{}, err
+	}
+	poll, err := envDuration("NOTIFIER_POLL_INTERVAL", 10*time.Second)
+	if err != nil {
+		return Notifier{}, err
+	}
+	window, err := envInt("NOTIFIER_WINDOW_SIZE", 6)
+	if err != nil {
+		return Notifier{}, err
+	}
+	threshold, err := envDecimal("NOTIFIER_DROP_THRESHOLD", "0.0036")
+	if err != nil {
+		return Notifier{}, err
+	}
+	cooldown, err := envDuration("NOTIFIER_COOLDOWN", 5*time.Minute)
+	if err != nil {
+		return Notifier{}, err
+	}
+	if poll <= 0 || window <= 0 || cooldown < 0 || !threshold.IsPositive() || !threshold.Less(domain.MustDecimal("1")) {
+		return Notifier{}, fmt.Errorf("invalid notifier poll interval, window, threshold, or cooldown")
+	}
+	return Notifier{Enabled: enabled, PollInterval: poll, WindowSize: window, DropThreshold: threshold, Cooldown: cooldown}, nil
+}
+
 func LoadBacktestFromEnv() (Backtest, error) {
 	count, err := envInt("BACKTEST_CANDLE_COUNT", 300)
 	if err != nil {
@@ -161,6 +196,18 @@ func envInt(name string, fallback int) (int, error) {
 	parsed, err := strconv.Atoi(value)
 	if err != nil {
 		return 0, fmt.Errorf("%s: %w", name, err)
+	}
+	return parsed, nil
+}
+
+func envBool(name string, fallback bool) (bool, error) {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return false, fmt.Errorf("%s: %w", name, err)
 	}
 	return parsed, nil
 }
