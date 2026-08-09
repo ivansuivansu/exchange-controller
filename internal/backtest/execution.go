@@ -47,8 +47,14 @@ func NewBacktestExecutionEngine(config SimulationConfig) (*BacktestExecutionEngi
 	if config.AmbiguityPolicy == "" {
 		config.AmbiguityPolicy = Conservative
 	}
+	if config.EntryOrderType == "" {
+		config.EntryOrderType = EntryLimitBuy
+	}
 	if config.AmbiguityPolicy != Conservative && config.AmbiguityPolicy != Optimistic {
 		return nil, errors.New("invalid ambiguity policy")
+	}
+	if config.EntryOrderType != EntryLimitBuy {
+		return nil, errors.New("unsupported backtest entry order type")
 	}
 	return &BacktestExecutionEngine{config: config, capital: config.StartingCapital}, nil
 }
@@ -96,11 +102,7 @@ func (e *BacktestExecutionEngine) processPending(candle domain.Candle) (*Backtes
 	if pending.plan.EntryPrice().Less(candle.Low) || candle.High.Less(pending.plan.EntryPrice()) {
 		return nil, nil
 	}
-	multiplier, err := domain.MustDecimal("1").Add(e.config.SlippageRate)
-	if err != nil {
-		return nil, err
-	}
-	actual, err := pending.plan.EntryPrice().Mul(multiplier, domain.RoundAwayFromZero)
+	actual, err := e.entryFillPrice(pending.plan)
 	if err != nil {
 		return nil, err
 	}
@@ -124,6 +126,19 @@ func (e *BacktestExecutionEngine) processPending(candle domain.Candle) (*Backtes
 	e.pending = nil
 	e.entriesFilled++
 	return nil, nil
+}
+
+func (e *BacktestExecutionEngine) entryFillPrice(plan domain.TradePlan) (domain.Decimal, error) {
+	switch e.config.EntryOrderType {
+	case EntryLimitBuy:
+		// A BUY limit can fill at its limit or better, never above it. The OHLC
+		// MVP has no information to award price improvement, so it fills exactly
+		// at the approved limit. A future MARKET entry model belongs in another
+		// branch and may apply adverse BUY slippage there.
+		return plan.EntryPrice(), nil
+	default:
+		return domain.Decimal{}, errors.New("unsupported backtest entry order type")
+	}
 }
 
 func (e *BacktestExecutionEngine) processPosition(candle domain.Candle) (*BacktestTradeResult, error) {

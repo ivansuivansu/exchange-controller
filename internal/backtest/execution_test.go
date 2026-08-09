@@ -45,7 +45,7 @@ func engine(t *testing.T, policy AmbiguityPolicy, fee, slippage string) *Backtes
 	return engine
 }
 
-func TestEntryFillTPWinFeesSlippageAndNoSameCandleExit(t *testing.T) {
+func TestLimitEntryNeverExceedsLimitFeesAndNoSameCandleExit(t *testing.T) {
 	start := time.Unix(2000, 0)
 	plan := testPlan(t, "p1", domain.MustDecimal("1"), 5*time.Minute)
 	e := engine(t, Conservative, "0.01", "0.01")
@@ -61,10 +61,11 @@ func TestEntryFillTPWinFeesSlippageAndNoSameCandleExit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.ExitReason != ExitTakeProfit || result.EntryPriceActual.String() != "101" || result.ExitPrice.String() != "108.9" {
+	if result.ExitReason != ExitTakeProfit || result.EntryPriceActual.String() != "100" ||
+		plan.EntryPrice().Less(result.EntryPriceActual) || result.ExitPrice.String() != "108.9" {
 		t.Fatalf("unexpected fill/exit: %+v", result)
 	}
-	if result.EntryFee.String() != "1.01" || result.ExitFee.String() != "1.089" || result.NetPnL.String() != "5.801" {
+	if result.EntryFee.String() != "1" || result.ExitFee.String() != "1.089" || result.NetPnL.String() != "6.811" || result.NetPnL.Equal(result.GrossPnL) {
 		t.Fatalf("fees/PnL: %+v", result)
 	}
 }
@@ -80,6 +81,35 @@ func TestEntryExpiration(t *testing.T) {
 	if err != nil || result == nil || result.ExitReason != ExitExpiration || !result.CapitalAfter.Equal(domain.MustDecimal("1000")) {
 		t.Fatalf("expiration result=%+v err=%v", result, err)
 	}
+}
+
+func TestEntryExpirationCandleBoundaries(t *testing.T) {
+	start := time.Unix(2000, 0)
+	t.Run("close exactly at expiration is eligible", func(t *testing.T) {
+		plan := testPlan(t, "boundary", domain.MustDecimal("1"), time.Minute)
+		e := engine(t, Conservative, "0", "0.5")
+		if err := e.Submit(plan, approved(plan, start), start, start); err != nil {
+			t.Fatal(err)
+		}
+		result, err := e.OnCandle(testCandle(start, "99", "101", "100"))
+		if err != nil || result != nil || e.position == nil {
+			t.Fatalf("boundary fill result=%+v err=%v", result, err)
+		}
+		if e.position.actualEntry.String() != "100" {
+			t.Fatalf("LIMIT BUY received adverse slippage: %s", e.position.actualEntry)
+		}
+	})
+	t.Run("expiration inside candle makes whole candle ineligible", func(t *testing.T) {
+		plan := testPlan(t, "inside", domain.MustDecimal("1"), 90*time.Second)
+		e := engine(t, Conservative, "0", "0")
+		if err := e.Submit(plan, approved(plan, start), start, start); err != nil {
+			t.Fatal(err)
+		}
+		result, err := e.OnCandle(testCandle(start.Add(time.Minute), "99", "101", "100"))
+		if err != nil || result == nil || result.ExitReason != ExitExpiration || e.position != nil {
+			t.Fatalf("inside-candle expiration result=%+v err=%v", result, err)
+		}
+	})
 }
 
 func TestSLLossAndAmbiguityPolicies(t *testing.T) {
@@ -111,6 +141,21 @@ func TestSLLossAndAmbiguityPolicies(t *testing.T) {
 	result, _ := e.OnCandle(testCandle(start.Add(time.Minute), "89", "100", "95"))
 	if result.ExitReason != ExitStopLoss || !result.NetPnL.Less(domain.Decimal{}) {
 		t.Fatalf("SL result=%+v", result)
+	}
+}
+
+func TestConservativeAmbiguityIsDefault(t *testing.T) {
+	start := time.Unix(2000, 0)
+	plan := testPlan(t, "default-policy", domain.MustDecimal("1"), 5*time.Minute)
+	e := engine(t, "", "0", "0")
+	if e.config.AmbiguityPolicy != Conservative {
+		t.Fatalf("default policy = %s", e.config.AmbiguityPolicy)
+	}
+	_ = e.Submit(plan, approved(plan, start), start, start)
+	_, _ = e.OnCandle(testCandle(start, "99", "101", "100"))
+	result, err := e.OnCandle(testCandle(start.Add(time.Minute), "89", "111", "100"))
+	if err != nil || result.ExitReason != ExitStopLoss {
+		t.Fatalf("default ambiguity result=%+v err=%v", result, err)
 	}
 }
 

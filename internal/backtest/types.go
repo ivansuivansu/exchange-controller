@@ -7,11 +7,14 @@ import (
 )
 
 type AmbiguityPolicy string
+type EntryOrderType string
 
 const (
 	Conservative AmbiguityPolicy = "CONSERVATIVE"
 	Optimistic   AmbiguityPolicy = "OPTIMISTIC"
 )
+
+const EntryLimitBuy EntryOrderType = "LIMIT_BUY"
 
 type ExitReason string
 
@@ -29,6 +32,7 @@ type SimulationConfig struct {
 	FeeRate         domain.Decimal
 	SlippageRate    domain.Decimal
 	AmbiguityPolicy AmbiguityPolicy
+	EntryOrderType  EntryOrderType
 }
 
 type BacktestTradeResult struct {
