@@ -23,6 +23,23 @@ type fakeMessenger struct {
 	texts []string
 }
 
+type blockingEditMessenger struct {
+	calls   int
+	started chan struct{}
+	release chan struct{}
+}
+
+func (m *blockingEditMessenger) SendPlan(_ context.Context, _ int64, _ telegram.PlanMessage) error {
+	m.calls++
+	if m.calls == 2 {
+		close(m.started)
+		<-m.release
+	}
+	return nil
+}
+
+func (*blockingEditMessenger) SendText(context.Context, int64, string) error { return nil }
+
 func newFakeMessenger() *fakeMessenger {
 	return &fakeMessenger{plans: make(chan telegram.PlanMessage, 10)}
 }
@@ -256,6 +273,45 @@ func TestOnlyOnePendingPlanAtATime(t *testing.T) {
 	}
 	if pending, ok := a.PendingPlan(); !ok || !pending.IsVersion(first.ID(), first.Version()) {
 		t.Fatal("first plan was not preserved as the sole pending plan")
+	}
+}
+
+func TestEditDoesNotHoldApproverMutexDuringSend(t *testing.T) {
+	now := time.Now()
+	messenger := &blockingEditMessenger{started: make(chan struct{}), release: make(chan struct{})}
+	a := newApprover(now, messenger)
+	plan := testPlan(t, now)
+	if err := a.Present(context.Background(), plan); err != nil {
+		t.Fatal(err)
+	}
+	entry := domain.MustDecimal("64000")
+	request := callback(plan, telegram.ActionEdit)
+	request.Edits = &domain.TradePlanEdits{EntryPrice: &entry}
+	done := make(chan error, 1)
+	go func() {
+		_, err := a.HandleCallback(context.Background(), request)
+		done <- err
+	}()
+	<-messenger.started
+	pendingRead := make(chan domain.TradePlan, 1)
+	go func() {
+		pending, _ := a.PendingPlan()
+		pendingRead <- pending
+	}()
+	select {
+	case pending := <-pendingRead:
+		if !pending.IsVersion(plan.ID(), plan.Version()) {
+			t.Fatal("old plan not visible during edit transition")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("PendingPlan blocked on slow Messenger.SendPlan")
+	}
+	close(messenger.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if pending, ok := a.PendingPlan(); !ok || pending.Version() != plan.Version()+1 {
+		t.Fatal("edited plan not committed atomically")
 	}
 }
 

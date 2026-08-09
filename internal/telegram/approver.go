@@ -31,6 +31,7 @@ type decisionResult struct {
 type planRecord struct {
 	plan    domain.TradePlan
 	decided bool
+	editing bool
 	waiter  chan decisionResult
 }
 
@@ -152,7 +153,7 @@ func (a *Approver) HandleCallback(ctx context.Context, callback Callback) (Callb
 		a.mu.Unlock()
 		return CallbackResult{}, ErrExpiredPlan
 	}
-	if record.decided {
+	if record.decided || record.editing {
 		a.mu.Unlock()
 		return CallbackResult{}, ErrAlreadyDecided
 	}
@@ -183,14 +184,21 @@ func (a *Approver) HandleCallback(ctx context.Context, callback Callback) (Callb
 			a.mu.Unlock()
 			return CallbackResult{}, editErr
 		}
-		// Send before committing the transition: a failed send must not leave an
-		// invisible new version registered as the pending plan.
+		// Reserve the old version while sending, but never hold the mutex across
+		// the network call. The transition is committed only after a successful
+		// send, so callbacks observe either the old or the new complete version.
+		record.editing = true
+		a.mu.Unlock()
 		if a.messenger != nil {
 			if sendErr := a.messenger.SendPlan(ctx, a.config.SendChatID, RenderPlan(edited)); sendErr != nil {
+				a.mu.Lock()
+				record.editing = false
 				a.mu.Unlock()
 				return CallbackResult{}, sendErr
 			}
 		}
+		a.mu.Lock()
+		record.editing = false
 		record.decided = true
 		record.waiter <- decisionResult{err: ErrPlanEdited}
 		a.records[recordKey(edited.ID(), edited.Version())] = &planRecord{

@@ -35,11 +35,12 @@ type Signal struct {
 }
 
 type TradeIdea struct {
-	ID          string
-	SignalIDs   []string
-	Market      Market
-	CreatedAt   time.Time
-	Description string
+	ID             string
+	SignalIDs      []string
+	Market         Market
+	ReferencePrice Decimal
+	CreatedAt      time.Time
+	Description    string
 }
 
 type TradePlanLifecycleStatus string

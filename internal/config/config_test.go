@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ivansuivansu/exchange-controller/internal/config"
 )
@@ -52,5 +53,26 @@ func TestTelegramValidation(t *testing.T) {
 	}
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("valid config rejected: %v", err)
+	}
+}
+
+func TestLoadLiveDataSimulationFromEnv(t *testing.T) {
+	t.Setenv("PLANNER_TAKE_PROFIT", "70000")
+	t.Setenv("PLANNER_STOP_LOSS", "60000")
+	t.Setenv("MARKET_WINDOW_SIZE", "42")
+	t.Setenv("MARKET_BASE", "ETH")
+	t.Setenv("MARKET_QUOTE", "USD")
+	t.Setenv("MARKET_INSTRUMENT", "ETH_USD")
+	t.Setenv("SIGNAL_DRAWDOWN_THRESHOLD", "0.03")
+	t.Setenv("SIGNAL_RECOVERY_THRESHOLD", "0.015")
+	t.Setenv("MARKET_POLL_INTERVAL", "2s")
+	got, err := config.LoadLiveDataSimulationFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Market.Base != "ETH" || got.Market.Quote != "USD" || got.Market.Instrument != "ETH_USD" || got.WindowSize != 42 ||
+		got.DrawdownThreshold.String() != "0.03" || got.RecoveryThreshold.String() != "0.015" ||
+		got.PollInterval != 2*time.Second {
+		t.Fatalf("unexpected live-data configuration: %+v", got)
 	}
 }

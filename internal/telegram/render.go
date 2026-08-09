@@ -8,7 +8,7 @@ import (
 
 func RenderPlan(plan domain.TradePlan) PlanMessage {
 	text := fmt.Sprintf(
-		"Trade Plan %s v%d\nInstrument: %s\nEntry: %s\nQuantity: %s\nTake profit: %s\nStop loss: %s\nApprove by: %s\nEntry TTL: %s",
+		"🟡 SIMULATION — NO LIVE ORDERS\nTrade Plan %s v%d\nInstrument: %s\nEntry: %s\nQuantity: %s\nTake profit: %s\nStop loss: %s\nApprove by: %s\nEntry TTL: %s",
 		plan.ID(), plan.Version(), plan.Market().Instrument, plan.EntryPrice(),
 		plan.Quantity(), plan.TakeProfit(), plan.StopLoss(),
 		plan.ApproveBy().UTC().Format("2006-01-02 15:04:05Z07:00"), plan.EntryTTL(),
