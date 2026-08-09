@@ -62,8 +62,12 @@ func (b Backtester) Run(ctx context.Context) (Report, error) {
 		if err != nil {
 			return Report{}, err
 		}
+		available, err := b.Execution.PlanningCapital()
+		if err != nil {
+			return Report{}, err
+		}
 		capital := domain.CapitalSnapshot{QuoteAsset: tradeIdea.Market.Quote,
-			AvailableQuote: b.Execution.Capital(), AsOf: candle.CloseTime}
+			AvailableQuote: available, AsOf: candle.CloseTime}
 		plans, err := b.Planner.Plan(ctx, tradeIdea, capital)
 		if err != nil {
 			var rejection *planner.PlanRejectionError
@@ -78,7 +82,7 @@ func (b Backtester) Run(ctx context.Context) (Report, error) {
 			report.PlansProduced++
 			approval := domain.Approval{PlanID: plan.ID(), PlanVersion: plan.Version(),
 				Decision: domain.ApprovalApproved, DecidedAt: candle.CloseTime}
-			if err := b.Execution.Submit(plan, approval, detected.ObservedAt, candle.CloseTime); err != nil {
+			if err := b.Execution.Submit(plan, approval, detected.ObservedAt, candle.CloseTime, *detected.Recovery); err != nil {
 				return Report{}, err
 			}
 			break // MVP: one lifecycle, even if a planner returns alternatives.

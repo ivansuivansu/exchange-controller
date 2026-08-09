@@ -185,3 +185,37 @@ func TestOverlappingPollingProducesSameHistoricalSequence(t *testing.T) {
 		t.Fatalf("poll overlap changed sequence: calls=%d opens=%v", calls.Load(), opens)
 	}
 }
+
+func TestHistoricalRangePaginationOrderingDeduplicationAndCompletion(t *testing.T) {
+	from := time.UnixMilli(1_700_000_000_000).UTC()
+	to := from.Add(4 * time.Minute)
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		call := calls.Add(1)
+		if r.URL.Query().Get("start_ts") == "" || r.URL.Query().Get("end_ts") == "" || r.URL.Query().Get("count") != "2" {
+			t.Errorf("missing range query: %s", r.URL.RawQuery)
+		}
+		if call == 1 {
+			_, _ = w.Write([]byte(`{"code":0,"result":{"data":[{"o":"101","h":"102","l":"100","c":"101","v":"1","t":1700000060000},{"o":"100","h":"101","l":"99","c":"100","v":"1","t":1700000000000}]}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"code":0,"result":{"data":[{"o":"102","h":"103","l":"101","c":"102","v":"1","t":1700000120000},{"o":"101","h":"102","l":"100","c":"101","v":"1","t":1700000060000},{"o":"103","h":"104","l":"102","c":"103","v":"1","t":1700000180000}]}}`))
+	}))
+	defer server.Close()
+	source, err := cryptocom.NewSource(cryptocom.Config{BaseURL: server.URL, HTTPClient: server.Client(), Market: cryptocom.BTCUSD, MaxAttempts: 1, CandleTimeframe: "M1", CandleCount: 2, Now: func() time.Time { return to }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	candles, err := source.LoadCompletedCandlesRange(context.Background(), from, to)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 2 || len(candles) != 4 {
+		t.Fatalf("calls=%d candles=%+v", calls.Load(), candles)
+	}
+	for i := 1; i < len(candles); i++ {
+		if !candles[i-1].OpenTime.Before(candles[i].OpenTime) {
+			t.Fatal("range is not chronological/deduplicated")
+		}
+	}
+}

@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	ossignal "os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -41,75 +44,143 @@ func main() {
 }
 
 func runBacktest() error {
-	settings, err := config.LoadLiveDataSimulationFromEnv()
+	flags := flag.NewFlagSet("backtest", flag.ContinueOnError)
+	filePath := flags.String("file", "", "read historical candle CSV")
+	fromText := flags.String("from", "", "range start (RFC3339 or YYYY-MM-DD)")
+	toText := flags.String("to", "", "range end, exclusive (RFC3339 or YYYY-MM-DD)")
+	cachePath := flags.String("cache", "", "save downloaded candle CSV")
+	tradePath := flags.String("trades", "backtest_trades.csv", "trade CSV output (empty disables)")
+	monthlyPath := flags.String("monthly", "backtest_monthly.csv", "monthly CSV output (empty disables)")
+	reportPath := flags.String("report", "", "optional text report output")
+	feeText := flags.String("fee-rate", os.Getenv("BACKTEST_FEE_RATE"), "fractional simulation fee rate; e.g. 0.001")
+	slippageText := flags.String("slippage-rate", os.Getenv("BACKTEST_SLIPPAGE_RATE"), "fractional adverse exit slippage")
+	if err := flags.Parse(os.Args[2:]); err != nil {
+		return err
+	}
+	if *feeText == "" {
+		*feeText = "0"
+	}
+	if *slippageText == "" {
+		*slippageText = "0"
+	}
+	fee, err := domain.ParseDecimal(*feeText)
+	if err != nil {
+		return fmt.Errorf("fee rate: %w", err)
+	}
+	slippage, err := domain.ParseDecimal(*slippageText)
+	if err != nil {
+		return fmt.Errorf("slippage rate: %w", err)
+	}
+	research := backtest.PlaceholderBTCUSDResearchPreset(fee, slippage)
+	timeframe := research.Simulation.Timeframe
+	from, err := parseOptionalTime(*fromText)
+	if err != nil {
+		return fmt.Errorf("from: %w", err)
+	}
+	to, err := parseOptionalTime(*toText)
+	if err != nil {
+		return fmt.Errorf("to: %w", err)
+	}
+	if (!from.IsZero() || !to.IsZero()) && (from.IsZero() || to.IsZero() || !from.Before(to)) {
+		return fmt.Errorf("both --from and --to are required and from must precede to")
+	}
+	var candles []domain.Candle
+	if *filePath != "" {
+		candles, err = backtest.LoadCandleCSV(*filePath, research.Simulation.Market, timeframe, from, to)
+	} else {
+		if from.IsZero() || to.IsZero() {
+			return fmt.Errorf("use --file or provide both --from and --to")
+		}
+		ctx, stop := signalNotifyContext()
+		defer stop()
+		source, sourceErr := cryptocom.NewSource(cryptocom.Config{HTTPClient: &http.Client{Timeout: 10 * time.Second}, Market: research.Simulation.Market, MaxAttempts: 3, RetryBackoff: time.Second, CandleTimeframe: research.Timeframe, CandleCount: 300})
+		if sourceErr != nil {
+			return sourceErr
+		}
+		candles, err = source.LoadCompletedCandlesRange(ctx, from, to)
+		if err == nil && *cachePath != "" {
+			err = writeFile(*cachePath, func(w io.Writer) error { return backtest.WriteCandleCSV(w, candles) })
+		}
+	}
 	if err != nil {
 		return err
 	}
-	backtestSettings, err := config.LoadBacktestFromEnv()
-	if err != nil {
-		return err
-	}
-	timeframe, err := cryptocom.TimeframeDuration(settings.CandleTimeframe)
-	if err != nil {
-		return err
+	if len(candles) == 0 {
+		return fmt.Errorf("dataset contains no completed candles in requested range")
 	}
 	ctx, stop := signalNotifyContext()
 	defer stop()
-	source, err := cryptocom.NewSource(cryptocom.Config{
-		HTTPClient: &http.Client{Timeout: settings.HTTPTimeout}, Market: settings.Market,
-		MaxAttempts: settings.MaxAttempts, RetryBackoff: settings.RetryBackoff,
-		CandleTimeframe: settings.CandleTimeframe, CandleCount: backtestSettings.CandleCount,
-	})
-	if err != nil {
-		return err
-	}
-	candles, err := source.LoadCompletedCandles(ctx)
-	if err != nil {
-		return err
-	}
-	history, err := backtest.NewInMemoryCandleSource(candles, settings.Market, timeframe)
+	history, err := backtest.NewInMemoryCandleSource(candles, research.Simulation.Market, timeframe)
 	if err != nil {
 		return err
 	}
 	detector, err := signals.NewDrawdownRecoveryDetector(signals.DrawdownRecoveryConfig{
-		WindowSize: settings.WindowSize, DrawdownThreshold: settings.DrawdownThreshold,
-		RecoveryThreshold: settings.RecoveryThreshold, Cooldown: settings.SignalCooldown,
+		WindowSize: research.Signal.WindowSize, DrawdownThreshold: research.Signal.DrawdownThreshold,
+		RecoveryThreshold: research.Signal.RecoveryThreshold, Cooldown: research.Signal.Cooldown,
 	})
 	if err != nil {
 		return err
 	}
-	executionEngine, err := backtest.NewBacktestExecutionEngine(backtest.SimulationConfig{
-		Market: settings.Market, Timeframe: timeframe, StartingCapital: settings.Capital.AvailableQuote,
-		FeeRate: backtestSettings.FeeRate, SlippageRate: backtestSettings.SlippageRate,
-		AmbiguityPolicy: backtest.AmbiguityPolicy(backtestSettings.AmbiguityPolicy),
-	})
+	executionEngine, err := backtest.NewBacktestExecutionEngine(research.Simulation)
 	if err != nil {
 		return err
 	}
 	report, err := (backtest.Backtester{
 		Source: history, Detector: detector, Ideas: idea.RecoveryBuilder{},
-		Planner: planner.PlannerV1{Config: settings.Planner}, Execution: executionEngine,
+		Planner: planner.PlannerV1{Config: research.Planner}, Execution: executionEngine,
 	}).Run(ctx)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("BACKTEST SIMULATION — %s %s\n", settings.Market.Instrument, settings.CandleTimeframe)
-	fmt.Printf("Capital: %s → %s %s | Net: %s | Return: %s%%\n",
-		report.StartingCapital, report.EndingCapital, settings.Market.Quote, report.NetProfitLoss, percent(report.TotalReturnPercent))
-	fmt.Printf("Signals: %d | Plans: %d | Rejections: %d | Filled: %d | Expired: %d\n",
-		report.TotalSignals, report.PlansProduced, report.PlannerRejections, report.EntriesFilled, report.EntriesExpired)
-	fmt.Printf("Wins/Losses: %d/%d | Win rate: %s%% | Profit factor: %s | Max drawdown: %s%% | Fees: %s\n",
-		report.WinningTrades, report.LosingTrades, percent(report.WinRate), report.ProfitFactor,
-		percent(report.MaximumDrawdown), report.TotalFeesPaid)
+	identity := backtest.DatasetIdentity{FirstCandle: candles[0].OpenTime, LastCandle: candles[len(candles)-1].OpenTime, CandleCount: len(candles), Timeframe: research.Timeframe, Instrument: research.Simulation.Market.Instrument}
+	if err := backtest.WriteResearchReport(os.Stdout, research, identity, report); err != nil {
+		return err
+	}
+	if *reportPath != "" {
+		if err := writeFile(*reportPath, func(w io.Writer) error { return backtest.WriteResearchReport(w, research, identity, report) }); err != nil {
+			return err
+		}
+	}
+	if *tradePath != "" {
+		if err := writeFile(*tradePath, func(w io.Writer) error { return backtest.WriteTradeCSV(w, report.Trades) }); err != nil {
+			return err
+		}
+	}
+	if *monthlyPath != "" {
+		if err := writeFile(*monthlyPath, func(w io.Writer) error { return backtest.WriteMonthlyCSV(w, backtest.MonthlyBreakdown(report)) }); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
-func percent(value domain.Decimal) string {
-	result, err := value.Mul(domain.MustDecimal("100"), domain.RoundTowardZero)
-	if err != nil {
-		return value.String()
+func parseOptionalTime(value string) (time.Time, error) {
+	if value == "" {
+		return time.Time{}, nil
 	}
-	return result.String()
+	if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+		return parsed.UTC(), nil
+	}
+	parsed, err := time.Parse("2006-01-02", value)
+	return parsed.UTC(), err
+}
+
+func writeFile(path string, write func(io.Writer) error) error {
+	dir := filepath.Dir(path)
+	if dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+	file, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	if err := write(file); err != nil {
+		_ = file.Close()
+		return err
+	}
+	return file.Close()
 }
 
 func runLiveDataSimulation() error {

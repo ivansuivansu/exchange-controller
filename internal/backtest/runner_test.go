@@ -103,6 +103,23 @@ func TestPlannerRejectionIsCounted(t *testing.T) {
 	}
 }
 
+func TestConfiguredFeeLeavesEntryFeeCapital(t *testing.T) {
+	candles := historicalSequence(1)
+	source, err := NewInMemoryCandleSource(candles, btcusd, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	detector, _ := signal.NewDrawdownRecoveryDetector(signal.DrawdownRecoveryConfig{WindowSize: 5, DrawdownThreshold: domain.MustDecimal("0.10"), RecoveryThreshold: domain.MustDecimal("0.05")})
+	engine, _ := NewBacktestExecutionEngine(SimulationConfig{Market: btcusd, Timeframe: time.Minute, StartingCapital: domain.MustDecimal("1000"), FeeRate: domain.MustDecimal("0.01"), AmbiguityPolicy: Conservative})
+	report, err := (Backtester{Source: source, Detector: detector, Ideas: idea.RecoveryBuilder{}, Planner: planner.PlannerV1{Config: planner.V1Config{Name: "fee-test", EntryMode: planner.EntryRecoveryClose, TakeProfitMode: planner.TakeProfitPreviousHigh, StopLossOffset: domain.MustDecimal("0.01"), MinimumRiskReward: domain.MustDecimal("0.5"), ApprovalTTL: time.Minute, EntryTTL: 5 * time.Minute}}, Execution: engine}).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.EntriesFilled != 1 || !report.TotalFeesPaid.IsPositive() {
+		t.Fatalf("fee simulation report=%+v", report)
+	}
+}
+
 func TestHistoricalSourceSortsAndRejectsMalformedData(t *testing.T) {
 	candles := historicalSequence(1)[:2]
 	source, err := NewInMemoryCandleSource([]domain.Candle{candles[1], candles[0]}, btcusd, time.Minute)

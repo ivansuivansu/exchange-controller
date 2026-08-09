@@ -12,6 +12,7 @@ import (
 type pendingEntry struct {
 	plan          domain.TradePlan
 	signalTime    time.Time
+	recovery      domain.RecoverySignal
 	submittedAt   time.Time
 	expiresAt     time.Time
 	capitalBefore domain.Decimal
@@ -62,14 +63,35 @@ func NewBacktestExecutionEngine(config SimulationConfig) (*BacktestExecutionEngi
 func (e *BacktestExecutionEngine) Capital() domain.Decimal { return e.capital }
 func (e *BacktestExecutionEngine) Active() bool            { return e.pending != nil || e.position != nil }
 
-func (e *BacktestExecutionEngine) Submit(plan domain.TradePlan, approval domain.Approval, signalTime, submittedAt time.Time) error {
+// PlanningCapital reserves enough quote currency for the configured entry
+// fee, so a planner that allocates all available quote does not create an
+// impossible simulated order when fees are non-zero.
+func (e *BacktestExecutionEngine) PlanningCapital() (domain.Decimal, error) {
+	multiplier, err := domain.MustDecimal("1").Add(e.config.FeeRate)
+	if err != nil {
+		return domain.Decimal{}, err
+	}
+	available, err := e.capital.Div(multiplier, domain.RoundTowardZero)
+	if err != nil || e.config.FeeRate.IsZero() {
+		return available, err
+	}
+	// Entry fees round away from zero; retain one Decimal unit to cover the
+	// maximum difference introduced by that rounding.
+	return available.Sub(domain.DecimalFromUnits(1))
+}
+
+func (e *BacktestExecutionEngine) Submit(plan domain.TradePlan, approval domain.Approval, signalTime, submittedAt time.Time, recovery ...domain.RecoverySignal) error {
 	if e.Active() {
 		return ErrBacktestActiveLifecycle
 	}
 	if approval.Decision != domain.ApprovalApproved || !approval.AppliesTo(plan) {
 		return execution.ErrPlanNotApproved
 	}
-	e.pending = &pendingEntry{plan: plan, signalTime: signalTime, submittedAt: submittedAt,
+	var context domain.RecoverySignal
+	if len(recovery) > 0 {
+		context = recovery[0]
+	}
+	e.pending = &pendingEntry{plan: plan, signalTime: signalTime, recovery: context, submittedAt: submittedAt,
 		expiresAt: plan.EntryExpiresAt(submittedAt), capitalBefore: e.capital}
 	return nil
 }
@@ -92,7 +114,9 @@ func (e *BacktestExecutionEngine) processPending(candle domain.Candle) (*Backtes
 	if candle.CloseTime.After(pending.expiresAt) {
 		result := &BacktestTradeResult{PlanID: pending.plan.ID(), IdeaID: pending.plan.IdeaID(),
 			Instrument: pending.plan.Market().Instrument, SignalTime: pending.signalTime,
+			RecentHigh: pending.recovery.RecentHigh, LocalLow: pending.recovery.LocalLow, RecoveryPrice: pending.recovery.RecoveryPrice,
 			EntrySubmittedAt: pending.submittedAt, EntryPricePlanned: pending.plan.EntryPrice(),
+			TakeProfit: pending.plan.TakeProfit(), StopLoss: pending.plan.StopLoss(),
 			ExitAt: pending.expiresAt, ExitReason: ExitExpiration,
 			Quantity: pending.plan.Quantity(), CapitalBefore: pending.capitalBefore, CapitalAfter: e.capital}
 		e.pending = nil
@@ -196,7 +220,9 @@ func (e *BacktestExecutionEngine) processPosition(candle domain.Candle) (*Backte
 	return &BacktestTradeResult{
 		PlanID: position.plan.ID(), IdeaID: position.plan.IdeaID(), Instrument: position.plan.Market().Instrument,
 		SignalTime: position.signalTime, EntrySubmittedAt: position.submittedAt, EntryFilledAt: position.filledAt,
+		RecentHigh: position.recovery.RecentHigh, LocalLow: position.recovery.LocalLow, RecoveryPrice: position.recovery.RecoveryPrice,
 		EntryPricePlanned: position.plan.EntryPrice(), EntryPriceActual: position.actualEntry,
+		TakeProfit: position.plan.TakeProfit(), StopLoss: position.plan.StopLoss(),
 		ExitAt: candle.CloseTime, ExitReason: reason, ExitPrice: actualExit, Quantity: position.plan.Quantity(),
 		EntryFee: position.entryFee, ExitFee: exitFee, GrossPnL: gross, NetPnL: net,
 		ReturnPercent: returnPercent, CapitalBefore: position.capitalBefore, CapitalAfter: after,

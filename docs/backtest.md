@@ -1,14 +1,41 @@
 # Deterministic Backtesting
 
-Run:
+Run a cached dataset:
 
 ```text
-go run ./cmd/exchange-controller backtest
+go run ./cmd/exchange-controller backtest --file data/btc_usd_m1.csv
 ```
 
-The command downloads a completed Crypto.com candlestick batch and then
-disconnects fetching from replay. Replay time is always the current candle's
-timestamp; strategy and approval decisions do not use wall-clock time.
+Or download an explicit half-open UTC range and cache it:
+
+```text
+go run ./cmd/exchange-controller backtest \
+  --from 2025-01-01 --to 2025-02-01 \
+  --cache data/btc_usd_m1_2025_01.csv \
+  --fee-rate 0.001
+```
+
+Dates may be `YYYY-MM-DD` or RFC3339. Crypto.com requests are paginated with
+`start_ts`, `end_ts`, and `count`. Results are restricted to `[from, to)`,
+sorted, deduplicated, validated, and limited to completed candles. The CSV
+cache has the fields `timestamp,open,high,low,close,volume`; timestamps are UTC
+RFC3339 and decimals are written without floating-point conversion.
+
+Replay time is always the current candle's timestamp; strategy and approval
+decisions do not use wall-clock time. By default, completed/expired lifecycle
+details are written to `backtest_trades.csv` and monthly results to
+`backtest_monthly.csv`. Use `--report path` for a text report or set an export
+flag to an empty value to disable that export.
+
+## Placeholder research preset
+
+`PLACEHOLDER_BTC_USD_M1_BASELINE` is a first understandable research baseline,
+not an optimized strategy and not a claim of profitability. It uses BTC_USD
+M1, a 60-candle lookback, 0.01 (1%) drawdown, 0.005 (0.5%) recovery,
+`RECOVERY_CLOSE` entry, `PREVIOUS_HIGH` TP, a stop 0.005 below the local low,
+minimum R/R 1.0, 10,000 USD starting capital, and conservative ambiguity.
+The full detector, planner, execution, fee, and dataset configuration is
+printed before the summary in every report.
 
 ## MVP Simulation Rules
 
@@ -36,10 +63,8 @@ capital only. They do not include mark-to-market unrealized position equity.
 
 ## Configuration
 
-- `BACKTEST_CANDLE_COUNT` (default `300`)
-- `BACKTEST_FEE_RATE` (default `0`)
-- `BACKTEST_SLIPPAGE_RATE` (default `0`)
-- `BACKTEST_AMBIGUITY_POLICY` (`CONSERVATIVE` by default)
+- `--fee-rate` / `BACKTEST_FEE_RATE` (default `0`)
+- `--slippage-rate` / `BACKTEST_SLIPPAGE_RATE` (default `0`)
 
-Starting capital is `AVAILABLE_QUOTE_CAPITAL`. Strategy, planner, market, and
-timeframe settings are shared with live-data simulation mode.
+Fee rate is always printed. It is a simulation input only; no Crypto.com fee
+tier is assumed. No parameter search or optimization is performed.

@@ -40,10 +40,15 @@ type BacktestTradeResult struct {
 	IdeaID            string
 	Instrument        domain.Instrument
 	SignalTime        time.Time
+	RecentHigh        domain.Decimal
+	LocalLow          domain.Decimal
+	RecoveryPrice     domain.Decimal
 	EntrySubmittedAt  time.Time
 	EntryFilledAt     time.Time
 	EntryPricePlanned domain.Decimal
 	EntryPriceActual  domain.Decimal
+	TakeProfit        domain.Decimal
+	StopLoss          domain.Decimal
 	ExitAt            time.Time
 	ExitReason        ExitReason
 	ExitPrice         domain.Decimal
@@ -56,6 +61,23 @@ type BacktestTradeResult struct {
 	CapitalBefore     domain.Decimal
 	CapitalAfter      domain.Decimal
 	WasAmbiguous      bool
+}
+
+type DatasetIdentity struct {
+	FirstCandle time.Time
+	LastCandle  time.Time
+	CandleCount int
+	Timeframe   string
+	Instrument  domain.Instrument
+}
+
+type MonthlyResult struct {
+	Month         string
+	Trades        int
+	Wins          int
+	Losses        int
+	NetPnL        domain.Decimal
+	ReturnPercent domain.Decimal
 }
 
 type EquityPoint struct {

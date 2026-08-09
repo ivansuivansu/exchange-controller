@@ -159,6 +159,70 @@ func (s *Source) LoadCompletedCandles(ctx context.Context) ([]domain.Candle, err
 	return nil, fmt.Errorf("Crypto.com historical candles after %d attempts: %w", s.maxAttempts, lastErr)
 }
 
+// LoadCompletedCandlesRange downloads completed candles in [from, to). The
+// endpoint is queried in bounded windows so ranges larger than one API page do
+// not silently lose data. Overlapping API responses are deduplicated by open
+// timestamp.
+func (s *Source) LoadCompletedCandlesRange(ctx context.Context, from, to time.Time) ([]domain.Candle, error) {
+	from, to = from.UTC(), to.UTC()
+	if from.IsZero() || to.IsZero() || !from.Before(to) {
+		return nil, errors.New("historical candle range must have from before to")
+	}
+	pageSpan := time.Duration(s.candleCount) * s.candleDuration
+	byOpen := make(map[int64]domain.Candle)
+	for pageStart := from; pageStart.Before(to); {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		pageEnd := pageStart.Add(pageSpan)
+		if to.Before(pageEnd) {
+			pageEnd = to
+		}
+		var page []domain.Candle
+		var lastErr error
+		for attempt := 0; attempt < s.maxAttempts; attempt++ {
+			page, lastErr = s.fetchCandlesRange(ctx, pageStart, pageEnd)
+			if lastErr == nil {
+				break
+			}
+			if attempt+1 < s.maxAttempts {
+				if err := wait(ctx, s.retryBackoff*time.Duration(attempt+1)); err != nil {
+					return nil, err
+				}
+			}
+		}
+		if lastErr != nil {
+			return nil, fmt.Errorf("Crypto.com historical range after %d attempts: %w", s.maxAttempts, lastErr)
+		}
+		for _, candle := range page {
+			if candle.OpenTime.Before(from) || candle.CloseTime.After(to) || candle.CloseTime.After(s.now()) {
+				continue
+			}
+			if !validCandle(candle) {
+				return nil, fmt.Errorf("invalid Crypto.com OHLC candle at %s", candle.OpenTime.Format(time.RFC3339))
+			}
+			key := candle.OpenTime.UnixMilli()
+			if existing, ok := byOpen[key]; ok && existing != candle {
+				return nil, fmt.Errorf("conflicting Crypto.com candle at %s", candle.OpenTime.Format(time.RFC3339))
+			}
+			byOpen[key] = candle
+		}
+		pageStart = pageEnd
+	}
+	candles := make([]domain.Candle, 0, len(byOpen))
+	for _, candle := range byOpen {
+		candles = append(candles, candle)
+	}
+	sort.Slice(candles, func(i, j int) bool { return candles[i].OpenTime.Before(candles[j].OpenTime) })
+	return candles, nil
+}
+
+func validCandle(c domain.Candle) bool {
+	return c.Open.IsPositive() && c.High.IsPositive() && c.Low.IsPositive() && c.Close.IsPositive() &&
+		!c.High.Less(c.Low) && !c.Open.Less(c.Low) && !c.High.Less(c.Open) &&
+		!c.Close.Less(c.Low) && !c.High.Less(c.Close)
+}
+
 func (s *Source) NextCandle(ctx context.Context) (domain.Candle, error) {
 	if len(s.pendingCandles) > 0 {
 		return s.popCandle(), nil
@@ -243,6 +307,10 @@ type candlestick struct {
 }
 
 func (s *Source) fetchCandles(ctx context.Context) ([]domain.Candle, error) {
+	return s.fetchCandlesRange(ctx, time.Time{}, time.Time{})
+}
+
+func (s *Source) fetchCandlesRange(ctx context.Context, from, to time.Time) ([]domain.Candle, error) {
 	endpoint, err := url.Parse(s.baseURL + "/public/get-candlestick")
 	if err != nil {
 		return nil, err
@@ -251,6 +319,12 @@ func (s *Source) fetchCandles(ctx context.Context) ([]domain.Candle, error) {
 	query.Set("instrument_name", string(s.market.Instrument))
 	query.Set("timeframe", s.candleTimeframe)
 	query.Set("count", strconv.Itoa(s.candleCount))
+	if !from.IsZero() {
+		query.Set("start_ts", strconv.FormatInt(from.UnixMilli(), 10))
+	}
+	if !to.IsZero() {
+		query.Set("end_ts", strconv.FormatInt(to.UnixMilli(), 10))
+	}
 	endpoint.RawQuery = query.Encode()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {
