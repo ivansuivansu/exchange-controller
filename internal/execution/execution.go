@@ -35,6 +35,7 @@ func (e *SimulationEngine) Execute(_ context.Context, plan domain.TradePlan, app
 		RequestedQuantity: plan.Quantity(), FilledQuantity: plan.Quantity(),
 		ProtectedQuantity: plan.Quantity(), AverageEntryPrice: plan.EntryPrice(),
 		EntryStatus: domain.EntryFilled, PositionStatus: domain.PositionOpen,
+		Knowledge: domain.ExecutionKnown,
 	}
 	e.current = &state
 	return state, nil

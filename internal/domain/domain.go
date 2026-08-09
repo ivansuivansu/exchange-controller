@@ -36,33 +36,41 @@ type Signal struct {
 
 type TradeIdea struct {
 	ID          string
-	SignalID    string
+	SignalIDs   []string
 	Market      Market
 	CreatedAt   time.Time
 	Description string
 }
 
-type TradePlanStatus string
+type TradePlanLifecycleStatus string
 
 const (
-	TradePlanPending  TradePlanStatus = "pending"
-	TradePlanApproved TradePlanStatus = "approved"
-	TradePlanRejected TradePlanStatus = "rejected"
-	TradePlanExpired  TradePlanStatus = "expired"
+	PlanPending  TradePlanLifecycleStatus = "pending"
+	PlanApproved TradePlanLifecycleStatus = "approved"
+	PlanRejected TradePlanLifecycleStatus = "rejected"
+	PlanExpired  TradePlanLifecycleStatus = "expired"
 )
 
+// TradePlanLifecycle records mutable workflow state separately from immutable
+// TradePlan intent.
+type TradePlanLifecycle struct {
+	PlanID      string
+	PlanVersion uint64
+	Status      TradePlanLifecycleStatus
+	UpdatedAt   time.Time
+}
+
 type TradePlanParams struct {
-	ID             string
-	Version        uint64
-	IdeaID         string
-	Market         Market
-	EntryPrice     Decimal
-	Quantity       Decimal
-	TakeProfit     Decimal
-	StopLoss       Decimal
-	ApproveBy      time.Time
-	EntryExpiresAt time.Time
-	Status         TradePlanStatus
+	ID         string
+	Version    uint64
+	IdeaID     string
+	Market     Market
+	EntryPrice Decimal
+	Quantity   Decimal
+	TakeProfit Decimal
+	StopLoss   Decimal
+	ApproveBy  time.Time
+	EntryTTL   time.Duration
 }
 
 // TradePlan has no exported fields so approved intent cannot be mutated in
@@ -73,36 +81,71 @@ func NewTradePlan(params TradePlanParams) (TradePlan, error) {
 	if params.ID == "" || params.Version == 0 || params.IdeaID == "" {
 		return TradePlan{}, errors.New("plan ID, version, and idea ID are required")
 	}
+	if params.Market.Base == "" || params.Market.Quote == "" || params.Market.Instrument == "" {
+		return TradePlan{}, errors.New("market base, quote, and instrument are required")
+	}
 	if !params.EntryPrice.IsPositive() || !params.Quantity.IsPositive() ||
 		!params.TakeProfit.IsPositive() || !params.StopLoss.IsPositive() {
 		return TradePlan{}, errors.New("entry, quantity, take profit, and stop loss must be positive")
 	}
-	if params.Status == "" {
-		params.Status = TradePlanPending
+	if params.ApproveBy.IsZero() || params.EntryTTL <= 0 {
+		return TradePlan{}, errors.New("approve-by and a positive entry TTL are required")
 	}
 	return TradePlan{params: params}, nil
 }
 
-func (p TradePlan) ID() string                         { return p.params.ID }
-func (p TradePlan) Version() uint64                    { return p.params.Version }
-func (p TradePlan) IdeaID() string                     { return p.params.IdeaID }
-func (p TradePlan) Market() Market                     { return p.params.Market }
-func (p TradePlan) EntryPrice() Decimal                { return p.params.EntryPrice }
-func (p TradePlan) Quantity() Decimal                  { return p.params.Quantity }
-func (p TradePlan) TakeProfit() Decimal                { return p.params.TakeProfit }
-func (p TradePlan) StopLoss() Decimal                  { return p.params.StopLoss }
-func (p TradePlan) ApproveBy() time.Time               { return p.params.ApproveBy }
-func (p TradePlan) EntryExpiresAt() time.Time          { return p.params.EntryExpiresAt }
-func (p TradePlan) Status() TradePlanStatus            { return p.params.Status }
+func (p TradePlan) ID() string              { return p.params.ID }
+func (p TradePlan) Version() uint64         { return p.params.Version }
+func (p TradePlan) IdeaID() string          { return p.params.IdeaID }
+func (p TradePlan) Market() Market          { return p.params.Market }
+func (p TradePlan) EntryPrice() Decimal     { return p.params.EntryPrice }
+func (p TradePlan) Quantity() Decimal       { return p.params.Quantity }
+func (p TradePlan) TakeProfit() Decimal     { return p.params.TakeProfit }
+func (p TradePlan) StopLoss() Decimal       { return p.params.StopLoss }
+func (p TradePlan) ApproveBy() time.Time    { return p.params.ApproveBy }
+func (p TradePlan) EntryTTL() time.Duration { return p.params.EntryTTL }
+func (p TradePlan) EntryExpiresAt(submittedAt time.Time) time.Time {
+	return submittedAt.Add(p.EntryTTL())
+}
 func (p TradePlan) IsVersion(id string, v uint64) bool { return p.ID() == id && p.Version() == v }
 
-func (p TradePlan) NewVersion(changes TradePlanParams) (TradePlan, error) {
-	changes.ID = p.ID()
-	changes.Version = p.Version() + 1
-	changes.IdeaID = p.IdeaID()
-	changes.Market = p.Market()
-	changes.Status = TradePlanPending
-	return NewTradePlan(changes)
+// TradePlanEdits contains only material fields that may be changed when
+// creating a new version. Nil fields retain their value from the prior plan.
+type TradePlanEdits struct {
+	EntryPrice *Decimal
+	Quantity   *Decimal
+	TakeProfit *Decimal
+	StopLoss   *Decimal
+	ApproveBy  *time.Time
+	EntryTTL   *time.Duration
+}
+
+func (p TradePlan) Edit(edits TradePlanEdits) (TradePlan, error) {
+	params := p.params
+	params.Version++
+	changed := false
+	if edits.EntryPrice != nil {
+		params.EntryPrice, changed = *edits.EntryPrice, true
+	}
+	if edits.Quantity != nil {
+		params.Quantity, changed = *edits.Quantity, true
+	}
+	if edits.TakeProfit != nil {
+		params.TakeProfit, changed = *edits.TakeProfit, true
+	}
+	if edits.StopLoss != nil {
+		params.StopLoss, changed = *edits.StopLoss, true
+	}
+	if edits.ApproveBy != nil {
+		params.ApproveBy, changed = *edits.ApproveBy, true
+	}
+	if edits.EntryTTL != nil {
+		params.EntryTTL, changed = *edits.EntryTTL, true
+	}
+	if !changed {
+		return TradePlan{}, errors.New("at least one material edit is required")
+	}
+	return NewTradePlan(params)
 }
 
 type ApprovalDecision string
@@ -131,6 +174,8 @@ const (
 	EntryPartiallyFilled EntryExecutionState = "partially_filled"
 	EntryFilled          EntryExecutionState = "filled"
 	EntryCancelled       EntryExecutionState = "cancelled"
+	EntryExpired         EntryExecutionState = "expired"
+	EntryRejected        EntryExecutionState = "rejected"
 )
 
 type PositionState string
@@ -141,20 +186,32 @@ const (
 	PositionClosed PositionState = "closed"
 )
 
+type ExecutionKnowledgeState string
+
+const (
+	ExecutionKnown     ExecutionKnowledgeState = "known"
+	ExecutionUnknown   ExecutionKnowledgeState = "unknown"
+	ExecutionAmbiguous ExecutionKnowledgeState = "ambiguous"
+)
+
 type ExecutionState struct {
-	PlanID             string
-	PlanVersion        uint64
-	RequestedQuantity  Decimal
-	FilledQuantity     Decimal
-	ProtectedQuantity  Decimal
-	AverageEntryPrice  Decimal
-	EntryStatus        EntryExecutionState
-	PositionStatus     PositionState
-	UnknownOrAmbiguous bool
+	PlanID            string
+	PlanVersion       uint64
+	RequestedQuantity Decimal
+	FilledQuantity    Decimal
+	ProtectedQuantity Decimal
+	AverageEntryPrice Decimal
+	EntryStatus       EntryExecutionState
+	PositionStatus    PositionState
+	Knowledge         ExecutionKnowledgeState
 }
 
 func (s ExecutionState) QuantitiesValid() bool {
-	return !s.RequestedQuantity.Less(s.FilledQuantity) &&
+	zero := Decimal{}
+	return !s.ProtectedQuantity.Less(zero) &&
+		!s.FilledQuantity.Less(zero) &&
+		!s.RequestedQuantity.Less(zero) &&
+		!s.RequestedQuantity.Less(s.FilledQuantity) &&
 		!s.FilledQuantity.Less(s.ProtectedQuantity)
 }
 
@@ -164,5 +221,5 @@ func (s ExecutionState) HasProtectionRisk() bool {
 
 func (s ExecutionState) LifecycleActive() bool {
 	return s.EntryStatus == EntryOpen || s.EntryStatus == EntryPartiallyFilled ||
-		s.PositionStatus == PositionOpen || s.UnknownOrAmbiguous
+		s.PositionStatus == PositionOpen || s.Knowledge != ExecutionKnown
 }

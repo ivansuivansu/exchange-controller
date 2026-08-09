@@ -14,7 +14,7 @@ type FakeBuilder struct{}
 
 func (FakeBuilder) Build(_ context.Context, signal domain.Signal) (domain.TradeIdea, error) {
 	return domain.TradeIdea{
-		ID: "idea-1", SignalID: signal.ID, Market: signal.Market,
+		ID: "idea-1", SignalIDs: []string{signal.ID}, Market: signal.Market,
 		CreatedAt: signal.ObservedAt, Description: "fake long idea",
 	}, nil
 }

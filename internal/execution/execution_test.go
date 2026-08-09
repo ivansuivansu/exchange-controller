@@ -22,6 +22,7 @@ func fakePlan(t *testing.T) domain.TradePlan {
 		Market:     domain.Market{Base: "BTC", Quote: "USD", Instrument: "BTC_USD"},
 		EntryPrice: domain.MustDecimal("10"), Quantity: domain.MustDecimal("1"),
 		TakeProfit: domain.MustDecimal("11"), StopLoss: domain.MustDecimal("9"),
+		ApproveBy: time.Now().Add(time.Minute), EntryTTL: time.Minute,
 	})
 	if err != nil {
 		t.Fatal(err)
