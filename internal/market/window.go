@@ -8,33 +8,33 @@ import (
 )
 
 type RollingWindow struct {
-	mu     sync.RWMutex
-	size   int
-	events []domain.MarketEvent
+	mu      sync.RWMutex
+	size    int
+	candles []domain.Candle
 }
 
 func NewRollingWindow(size int) (*RollingWindow, error) {
 	if size <= 0 {
 		return nil, errors.New("rolling window size must be positive")
 	}
-	return &RollingWindow{size: size, events: make([]domain.MarketEvent, 0, size)}, nil
+	return &RollingWindow{size: size, candles: make([]domain.Candle, 0, size)}, nil
 }
 
-func (w *RollingWindow) Add(event domain.MarketEvent) {
+func (w *RollingWindow) Add(candle domain.Candle) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if len(w.events) == w.size {
-		copy(w.events, w.events[1:])
-		w.events[len(w.events)-1] = event
+	if len(w.candles) == w.size {
+		copy(w.candles, w.candles[1:])
+		w.candles[len(w.candles)-1] = candle
 		return
 	}
-	w.events = append(w.events, event)
+	w.candles = append(w.candles, candle)
 }
 
-func (w *RollingWindow) Events() []domain.MarketEvent {
+func (w *RollingWindow) Candles() []domain.Candle {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
-	result := make([]domain.MarketEvent, len(w.events))
-	copy(result, w.events)
+	result := make([]domain.Candle, len(w.candles))
+	copy(result, w.candles)
 	return result
 }

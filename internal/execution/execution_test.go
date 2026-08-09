@@ -122,15 +122,16 @@ func TestSimulationEngineRespectsCancelledContext(t *testing.T) {
 func TestFakePipelineHappyPath(t *testing.T) {
 	ctx := context.Background()
 	now := time.Unix(1_700_000_000, 0).UTC()
-	source := &market.FakeSource{Event: domain.MarketEvent{
+	source := &market.FakeCandleSource{Candles: []domain.Candle{{
 		Market: domain.Market{Base: "BTC", Quote: "USD", Instrument: "BTC_USD"},
-		Price:  domain.MustDecimal("64100"), At: now,
-	}}
-	event, err := source.Next(ctx)
+		Open:   domain.MustDecimal("64000"), High: domain.MustDecimal("64200"), Low: domain.MustDecimal("63900"), Close: domain.MustDecimal("64100"),
+		OpenTime: now.Add(-time.Minute), CloseTime: now,
+	}}}
+	candle, err := source.NextCandle(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	detected, err := (signal.FakeDetector{}).Detect(ctx, event)
+	detected, err := (signal.FakeDetector{}).Detect(ctx, candle)
 	if err != nil {
 		t.Fatal(err)
 	}

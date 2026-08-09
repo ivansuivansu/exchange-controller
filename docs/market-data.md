@@ -6,9 +6,12 @@ Run the real-market-data mode with:
 APP_MODE=live-data-simulation
 ```
 
-This mode polls Crypto.com's unauthenticated Exchange REST endpoint
-`/exchange/v1/public/get-tickers?instrument_name=...`. Execution is always
-`SimulationEngine`; it cannot submit an exchange order.
+This mode polls Crypto.com's unauthenticated Exchange REST candlestick endpoint
+`/exchange/v1/public/get-candlestick`. Strategy decisions use only completed,
+chronologically ordered candles. The ticker endpoint remains available for
+future display/execution uses but polling frequency does not define strategy
+time. Execution is always `SimulationEngine`; it cannot submit an exchange
+order.
 
 ## Configuration
 
@@ -17,6 +20,7 @@ This mode polls Crypto.com's unauthenticated Exchange REST endpoint
 - `MARKET_INSTRUMENT` (default `BTC_USD`)
 - `MARKET_WINDOW_SIZE` (default `60`)
 - `MARKET_POLL_INTERVAL` (default `5s`)
+- `MARKET_CANDLE_TIMEFRAME` (default `M1`)
 - `MARKET_HTTP_TIMEOUT` (default `10s`)
 - `MARKET_MAX_ATTEMPTS` (default `3`)
 - `MARKET_RETRY_BACKOFF` (default `1s`)

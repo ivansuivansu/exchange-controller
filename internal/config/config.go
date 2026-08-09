@@ -37,6 +37,10 @@ func LoadLiveDataSimulationFromEnv() (LiveDataSimulation, error) {
 	if instrument == "" {
 		instrument = "BTC_USD"
 	}
+	timeframe := strings.TrimSpace(os.Getenv("MARKET_CANDLE_TIMEFRAME"))
+	if timeframe == "" {
+		timeframe = "M1"
+	}
 	window, err := envInt("MARKET_WINDOW_SIZE", 60)
 	if err != nil {
 		return LiveDataSimulation{}, err
@@ -97,7 +101,7 @@ func LoadLiveDataSimulationFromEnv() (LiveDataSimulation, error) {
 			Base: domain.Asset(base), Quote: domain.Asset(quote), Instrument: domain.Instrument(instrument),
 		},
 		WindowSize: window, DrawdownThreshold: drawdown, RecoveryThreshold: recovery,
-		SignalCooldown: cooldown, PollInterval: poll, HTTPTimeout: timeout,
+		SignalCooldown: cooldown, PollInterval: poll, CandleTimeframe: timeframe, HTTPTimeout: timeout,
 		MaxAttempts: attempts, RetryBackoff: backoff, Quantity: quantity,
 		TakeProfit: tp, StopLoss: sl, ApprovalTTL: approvalTTL, EntryTTL: entryTTL,
 	}, nil
@@ -154,6 +158,7 @@ type LiveDataSimulation struct {
 	RecoveryThreshold domain.Decimal
 	SignalCooldown    time.Duration
 	PollInterval      time.Duration
+	CandleTimeframe   string
 	HTTPTimeout       time.Duration
 	MaxAttempts       int
 	RetryBackoff      time.Duration

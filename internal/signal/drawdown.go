@@ -12,7 +12,11 @@ import (
 	"github.com/ivansuivansu/exchange-controller/internal/market"
 )
 
-var ErrNoSignal = errors.New("no signal")
+var (
+	ErrNoSignal         = errors.New("no signal")
+	ErrDuplicateCandle  = errors.New("candle was already processed")
+	ErrIncompleteCandle = errors.New("candle is not complete")
+)
 
 type DetectorState string
 
@@ -31,13 +35,15 @@ type DrawdownRecoveryConfig struct {
 }
 
 type DrawdownRecoveryDetector struct {
-	mu        sync.Mutex
-	config    DrawdownRecoveryConfig
-	window    *market.RollingWindow
-	state     DetectorState
-	high      domain.Decimal
-	low       domain.Decimal
-	emittedAt time.Time
+	mu           sync.Mutex
+	config       DrawdownRecoveryConfig
+	window       *market.RollingWindow
+	state        DetectorState
+	high         domain.Decimal
+	low          domain.Decimal
+	emittedAt    time.Time
+	lastOpenTime time.Time
+	now          func() time.Time
 }
 
 var _ SignalDetector = (*DrawdownRecoveryDetector)(nil)
@@ -56,7 +62,7 @@ func NewDrawdownRecoveryDetector(config DrawdownRecoveryConfig) (*DrawdownRecove
 		return nil, errors.New("signal cooldown must not be negative")
 	}
 	window, _ := market.NewRollingWindow(config.WindowSize)
-	return &DrawdownRecoveryDetector{config: config, window: window, state: StateObserving}, nil
+	return &DrawdownRecoveryDetector{config: config, window: window, state: StateObserving, now: time.Now}, nil
 }
 
 func validateRatio(value domain.Decimal) error {
@@ -72,39 +78,51 @@ func (d *DrawdownRecoveryDetector) State() DetectorState {
 	return d.state
 }
 
-func (d *DrawdownRecoveryDetector) Detect(ctx context.Context, event domain.MarketEvent) (domain.Signal, error) {
+func (d *DrawdownRecoveryDetector) SetClock(now func() time.Time) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.now = now
+}
+
+func (d *DrawdownRecoveryDetector) Detect(ctx context.Context, candle domain.Candle) (domain.Signal, error) {
 	if err := ctx.Err(); err != nil {
 		return domain.Signal{}, err
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if candle.OpenTime.IsZero() || !candle.OpenTime.After(d.lastOpenTime) {
+		return domain.Signal{}, ErrDuplicateCandle
+	}
+	if candle.CloseTime.After(d.now()) {
+		return domain.Signal{}, ErrIncompleteCandle
+	}
+	d.lastOpenTime = candle.OpenTime
 	if d.state == StateSignalEmitted {
-		if event.At.Sub(d.emittedAt) < d.config.Cooldown {
+		if candle.CloseTime.Sub(d.emittedAt) < d.config.Cooldown {
 			return domain.Signal{}, ErrNoSignal
 		}
 		d.window, _ = market.NewRollingWindow(d.config.WindowSize)
 		d.state, d.high, d.low = StateObserving, domain.Decimal{}, domain.Decimal{}
 	}
-	d.window.Add(event)
+	d.window.Add(candle)
 
 	switch d.state {
 	case StateObserving:
-		d.high = windowHigh(d.window.Events())
-		if reached(d.high, event.Price, d.config.DrawdownThreshold, false) {
-			d.low = event.Price
-			d.state = StateDrawdown
+		d.high = windowHigh(d.window.Candles())
+		if reached(d.high, candle.Low, d.config.DrawdownThreshold, false) {
+			d.low, d.state = candle.Low, StateDrawdown
 		}
 	case StateDrawdown, StateRecovering:
-		if event.Price.Less(d.low) || event.Price.Equal(d.low) {
-			d.low, d.state = event.Price, StateDrawdown
+		if candle.Low.Less(d.low) {
+			d.low, d.state = candle.Low, StateDrawdown
 			return domain.Signal{}, ErrNoSignal
 		}
 		d.state = StateRecovering
-		if reached(d.low, event.Price, d.config.RecoveryThreshold, true) {
-			d.state, d.emittedAt = StateSignalEmitted, event.At
+		if reached(d.low, candle.Close, d.config.RecoveryThreshold, true) {
+			d.state, d.emittedAt = StateSignalEmitted, candle.CloseTime
 			return domain.Signal{
-				ID: fmt.Sprintf("drawdown-recovery-%d", event.At.UnixNano()), Market: event.Market,
-				ObservedAt: event.At, Price: event.Price,
+				ID: fmt.Sprintf("drawdown-recovery-%d", candle.OpenTime.UnixNano()), Market: candle.Market,
+				ObservedAt: candle.CloseTime, Price: candle.Close,
 				Description: fmt.Sprintf("recovery from local low %s after drawdown from %s", d.low, d.high),
 			}, nil
 		}
@@ -112,11 +130,11 @@ func (d *DrawdownRecoveryDetector) Detect(ctx context.Context, event domain.Mark
 	return domain.Signal{}, ErrNoSignal
 }
 
-func windowHigh(events []domain.MarketEvent) domain.Decimal {
+func windowHigh(candles []domain.Candle) domain.Decimal {
 	var high domain.Decimal
-	for i, event := range events {
-		if i == 0 || high.Less(event.Price) {
-			high = event.Price
+	for i, candle := range candles {
+		if i == 0 || high.Less(candle.High) {
+			high = candle.High
 		}
 	}
 	return high
@@ -135,6 +153,5 @@ func reached(from, to, threshold domain.Decimal, upward bool) bool {
 	if delta.Sign() < 0 {
 		return false
 	}
-	ratio := new(big.Rat).Quo(delta, fromRat)
-	return ratio.Cmp(thresholdRat) >= 0
+	return new(big.Rat).Quo(delta, fromRat).Cmp(thresholdRat) >= 0
 }

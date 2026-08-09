@@ -16,7 +16,7 @@ import (
 )
 
 type Runner struct {
-	Market    market.MarketDataSource
+	Market    market.CandleDataSource
 	Signals   signal.SignalDetector
 	Ideas     idea.IdeaBuilder
 	Planner   planner.TradePlanner
@@ -30,7 +30,7 @@ func (r Runner) Run(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		event, err := r.Market.Next(ctx)
+		candle, err := r.Market.NextCandle(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
@@ -41,8 +41,8 @@ func (r Runner) Run(ctx context.Context) error {
 		if state, exists := r.Execution.Current(); exists && state.LifecycleActive() {
 			continue
 		}
-		detected, err := r.Signals.Detect(ctx, event)
-		if errors.Is(err, signal.ErrNoSignal) {
+		detected, err := r.Signals.Detect(ctx, candle)
+		if errors.Is(err, signal.ErrNoSignal) || errors.Is(err, signal.ErrDuplicateCandle) || errors.Is(err, signal.ErrIncompleteCandle) {
 			continue
 		}
 		if err != nil {

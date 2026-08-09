@@ -7,14 +7,14 @@ import (
 )
 
 type SignalDetector interface {
-	Detect(context.Context, domain.MarketEvent) (domain.Signal, error)
+	Detect(context.Context, domain.Candle) (domain.Signal, error)
 }
 
 type FakeDetector struct{}
 
-func (FakeDetector) Detect(_ context.Context, event domain.MarketEvent) (domain.Signal, error) {
+func (FakeDetector) Detect(_ context.Context, candle domain.Candle) (domain.Signal, error) {
 	return domain.Signal{
-		ID: "signal-1", Market: event.Market, ObservedAt: event.At,
-		Price: event.Price, Description: "fake recovery signal",
+		ID: "signal-1", Market: candle.Market, ObservedAt: candle.CloseTime,
+		Price: candle.Close, Description: "fake recovery signal",
 	}, nil
 }

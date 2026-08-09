@@ -48,6 +48,7 @@ func runLiveDataSimulation() error {
 	source, err := cryptocom.NewSource(cryptocom.Config{
 		HTTPClient: client, Market: settings.Market, PollInterval: settings.PollInterval,
 		MaxAttempts: settings.MaxAttempts, RetryBackoff: settings.RetryBackoff,
+		CandleTimeframe: settings.CandleTimeframe, CandleCount: settings.WindowSize + 1,
 	})
 	if err != nil {
 		return err
@@ -98,14 +99,16 @@ func signalNotifyContext() (context.Context, context.CancelFunc) {
 func runDemo() {
 	ctx := context.Background()
 	now := time.Now().UTC()
-	source := &market.FakeSource{Event: domain.MarketEvent{
-		Market: cryptocom.BTCUSD, Price: domain.MustDecimal("64100"), At: now,
-	}}
-	event, err := source.Next(ctx)
+	source := &market.FakeCandleSource{Candles: []domain.Candle{{
+		Market: cryptocom.BTCUSD, Open: domain.MustDecimal("64000"), High: domain.MustDecimal("64200"),
+		Low: domain.MustDecimal("63900"), Close: domain.MustDecimal("64100"),
+		OpenTime: now.Add(-time.Minute), CloseTime: now,
+	}}}
+	candle, err := source.NextCandle(ctx)
 	if err != nil {
 		log.Fatal(err)
 	}
-	detected, err := (signals.FakeDetector{}).Detect(ctx, event)
+	detected, err := (signals.FakeDetector{}).Detect(ctx, candle)
 	if err != nil {
 		log.Fatal(err)
 	}

@@ -20,6 +20,20 @@ type MarketEvent struct {
 	At     time.Time
 }
 
+// Candle is an instrument-agnostic OHLCV observation for a fixed interval.
+// VolumeAvailable distinguishes unavailable volume from an actual zero.
+type Candle struct {
+	Market          Market
+	Open            Decimal
+	High            Decimal
+	Low             Decimal
+	Close           Decimal
+	Volume          Decimal
+	VolumeAvailable bool
+	OpenTime        time.Time
+	CloseTime       time.Time
+}
+
 type MarketState struct {
 	Market    Market
 	LastPrice Decimal

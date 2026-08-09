@@ -26,8 +26,11 @@ func TestRealSignalToTelegramApprovalToSimulatedExecution(t *testing.T) {
 	}
 	var detected domain.Signal
 	for i, price := range []string{"100", "90", "94.5"} {
-		detected, err = detector.Detect(ctx, domain.MarketEvent{
-			Market: market, Price: domain.MustDecimal(price), At: now.Add(time.Duration(i) * time.Second),
+		openTime := now.Add(time.Duration(i) * time.Minute)
+		detected, err = detector.Detect(ctx, domain.Candle{
+			Market: market, Open: domain.MustDecimal(price), High: domain.MustDecimal(price),
+			Low: domain.MustDecimal(price), Close: domain.MustDecimal(price),
+			OpenTime: openTime, CloseTime: openTime.Add(time.Minute),
 		})
 	}
 	if err != nil {

@@ -72,7 +72,7 @@ func TestLoadLiveDataSimulationFromEnv(t *testing.T) {
 	}
 	if got.Market.Base != "ETH" || got.Market.Quote != "USD" || got.Market.Instrument != "ETH_USD" || got.WindowSize != 42 ||
 		got.DrawdownThreshold.String() != "0.03" || got.RecoveryThreshold.String() != "0.015" ||
-		got.PollInterval != 2*time.Second {
+		got.PollInterval != 2*time.Second || got.CandleTimeframe != "M1" {
 		t.Fatalf("unexpected live-data configuration: %+v", got)
 	}
 }
