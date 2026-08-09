@@ -43,7 +43,8 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	state, err := (&execution.SimulationEngine{}).Execute(ctx, plans[0], decision)
+	controller := execution.NewExecutionController(&execution.SimulationEngine{})
+	state, err := controller.Execute(ctx, plans[0], decision)
 	if err != nil {
 		log.Fatal(err)
 	}

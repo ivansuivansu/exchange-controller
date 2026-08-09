@@ -8,27 +8,31 @@ import (
 	"github.com/ivansuivansu/exchange-controller/internal/domain"
 )
 
-var ErrActiveLifecycle = errors.New("an entry or position lifecycle is already active")
+var ErrInvalidLifecycleTransition = errors.New("invalid execution lifecycle transition")
 
+// ExecutionEngine executes a TradePlan that its caller has already authorized.
+// Authorization and portfolio-level lifecycle policy do not belong to adapters.
 type ExecutionEngine interface {
-	Execute(context.Context, domain.TradePlan, domain.Approval) (domain.ExecutionState, error)
+	Execute(context.Context, domain.TradePlan) (domain.ExecutionState, error)
+	Close(context.Context) (domain.ExecutionState, error)
 }
 
-// SimulationEngine fills and protects the requested quantity immediately. It
-// retains the open lifecycle so a second plan cannot execute concurrently.
+// SimulationEngine is a simple execution adapter: entry fills immediately and
+// the complete fill is protected immediately.
 type SimulationEngine struct {
 	mu      sync.Mutex
 	current *domain.ExecutionState
 }
 
-func (e *SimulationEngine) Execute(_ context.Context, plan domain.TradePlan, approval domain.Approval) (domain.ExecutionState, error) {
+func (e *SimulationEngine) Execute(ctx context.Context, plan domain.TradePlan) (domain.ExecutionState, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.ExecutionState{}, err
+	}
+
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.current != nil && e.current.LifecycleActive() {
-		return domain.ExecutionState{}, ErrActiveLifecycle
-	}
-	if approval.Decision != domain.ApprovalApproved || !approval.AppliesTo(plan) {
-		return domain.ExecutionState{}, errors.New("plan does not have matching approval")
+	if err := ctx.Err(); err != nil {
+		return domain.ExecutionState{}, err
 	}
 	state := domain.ExecutionState{
 		PlanID: plan.ID(), PlanVersion: plan.Version(),
@@ -50,11 +54,15 @@ func (e *SimulationEngine) Current() (domain.ExecutionState, bool) {
 	return *e.current, true
 }
 
-// Close completes the simulated lifecycle.
-func (e *SimulationEngine) Close() {
+func (e *SimulationEngine) Close(ctx context.Context) (domain.ExecutionState, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.ExecutionState{}, err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.current != nil {
-		e.current.PositionStatus = domain.PositionClosed
+	if e.current == nil || e.current.PositionStatus != domain.PositionOpen {
+		return domain.ExecutionState{}, ErrInvalidLifecycleTransition
 	}
+	e.current.PositionStatus = domain.PositionClosed
+	return *e.current, nil
 }

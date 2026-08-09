@@ -30,20 +30,92 @@ func fakePlan(t *testing.T) domain.TradePlan {
 	return p
 }
 
-func TestSingleActiveLifecycle(t *testing.T) {
+func approved(plan domain.TradePlan) domain.Approval {
+	return domain.Approval{PlanID: plan.ID(), PlanVersion: plan.Version(), Decision: domain.ApprovalApproved}
+}
+
+func TestControllerRejectsUnapprovedPlan(t *testing.T) {
 	ctx := context.Background()
 	engine := &execution.SimulationEngine{}
+	controller := execution.NewExecutionController(engine)
 	plan := fakePlan(t)
-	approved := domain.Approval{PlanID: plan.ID(), PlanVersion: plan.Version(), Decision: domain.ApprovalApproved}
-	if _, err := engine.Execute(ctx, plan, approved); err != nil {
+	tests := []domain.Approval{
+		{},
+		{PlanID: plan.ID(), PlanVersion: plan.Version(), Decision: domain.ApprovalRejected},
+		{PlanID: plan.ID(), PlanVersion: plan.Version() + 1, Decision: domain.ApprovalApproved},
+	}
+	for _, decision := range tests {
+		if _, err := controller.Execute(ctx, plan, decision); !errors.Is(err, execution.ErrPlanNotApproved) {
+			t.Fatalf("Execute approval %+v error = %v, want ErrPlanNotApproved", decision, err)
+		}
+	}
+	if _, ok := engine.Current(); ok {
+		t.Fatal("controller invoked engine for an unapproved plan")
+	}
+}
+
+func TestControllerRejectsSecondActiveLifecycle(t *testing.T) {
+	ctx := context.Background()
+	controller := execution.NewExecutionController(&execution.SimulationEngine{})
+	plan := fakePlan(t)
+	if _, err := controller.Execute(ctx, plan, approved(plan)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := engine.Execute(ctx, plan, approved); !errors.Is(err, execution.ErrActiveLifecycle) {
+	if _, err := controller.Execute(ctx, plan, approved(plan)); !errors.Is(err, execution.ErrActiveLifecycle) {
 		t.Fatalf("second execution error = %v, want ErrActiveLifecycle", err)
 	}
-	engine.Close()
-	if _, err := engine.Execute(ctx, plan, approved); err != nil {
-		t.Fatalf("execution after lifecycle close: %v", err)
+}
+
+func TestEngineExecutesAuthorizedPlan(t *testing.T) {
+	engine := &execution.SimulationEngine{}
+	plan := fakePlan(t)
+	if _, err := engine.Close(context.Background()); !errors.Is(err, execution.ErrInvalidLifecycleTransition) {
+		t.Fatalf("close before execution error = %v, want ErrInvalidLifecycleTransition", err)
+	}
+	state, err := engine.Execute(context.Background(), plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.PlanID != plan.ID() || !state.FilledQuantity.Equal(plan.Quantity()) ||
+		!state.ProtectedQuantity.Equal(plan.Quantity()) || state.PositionStatus != domain.PositionOpen {
+		t.Fatalf("unexpected execution state: %+v", state)
+	}
+	if _, err := engine.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := engine.Close(context.Background()); !errors.Is(err, execution.ErrInvalidLifecycleTransition) {
+		t.Fatalf("repeated close error = %v, want ErrInvalidLifecycleTransition", err)
+	}
+}
+
+func TestClosedLifecycleAllowsNextPlan(t *testing.T) {
+	ctx := context.Background()
+	controller := execution.NewExecutionController(&execution.SimulationEngine{})
+	first := fakePlan(t)
+	if _, err := controller.Execute(ctx, first, approved(first)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controller.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controller.Close(ctx); !errors.Is(err, execution.ErrInvalidLifecycleTransition) {
+		t.Fatalf("second close error = %v, want ErrInvalidLifecycleTransition", err)
+	}
+	entry := domain.MustDecimal("10.5")
+	second, err := first.Edit(domain.TradePlanEdits{EntryPrice: &entry})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controller.Execute(ctx, second, approved(second)); err != nil {
+		t.Fatalf("next execution after close: %v", err)
+	}
+}
+
+func TestSimulationEngineRespectsCancelledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := (&execution.SimulationEngine{}).Execute(ctx, fakePlan(t)); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Execute error = %v, want context.Canceled", err)
 	}
 }
 
@@ -74,7 +146,8 @@ func TestFakePipelineHappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	state, err := (&execution.SimulationEngine{}).Execute(ctx, plans[0], decision)
+	controller := execution.NewExecutionController(&execution.SimulationEngine{})
+	state, err := controller.Execute(ctx, plans[0], decision)
 	if err != nil {
 		t.Fatal(err)
 	}
