@@ -26,6 +26,14 @@ func (RecoveryBuilder) Build(_ context.Context, signal domain.Signal) (domain.Tr
 	return domain.TradeIdea{
 		ID: fmt.Sprintf("idea-%d", signal.ObservedAt.UnixNano()), SignalIDs: []string{signal.ID},
 		Market: signal.Market, ReferencePrice: signal.Price, CreatedAt: signal.ObservedAt,
-		Description: "long idea from drawdown recovery signal",
+		Description: "long idea from drawdown recovery signal", Recovery: cloneRecovery(signal.Recovery),
 	}, nil
+}
+
+func cloneRecovery(source *domain.RecoverySignal) *domain.RecoverySignal {
+	if source == nil {
+		return nil
+	}
+	copy := *source
+	return &copy
 }

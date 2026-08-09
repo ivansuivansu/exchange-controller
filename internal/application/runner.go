@@ -22,6 +22,7 @@ type Runner struct {
 	Planner   planner.TradePlanner
 	Approver  approval.PlanApprover
 	Execution *execution.ExecutionController
+	Capital   domain.CapitalSnapshot
 	Logger    *log.Logger
 }
 
@@ -52,8 +53,13 @@ func (r Runner) Run(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("build idea: %w", err)
 		}
-		plans, err := r.Planner.Plan(ctx, tradeIdea)
+		plans, err := r.Planner.Plan(ctx, tradeIdea, r.Capital)
 		if err != nil {
+			var rejection *planner.PlanRejectionError
+			if errors.As(err, &rejection) {
+				r.logf("SIMULATION plan rejected before Telegram: %v", rejection)
+				continue
+			}
 			return fmt.Errorf("plan trade: %w", err)
 		}
 		for _, plan := range plans {

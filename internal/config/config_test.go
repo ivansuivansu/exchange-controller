@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ivansuivansu/exchange-controller/internal/config"
+	"github.com/ivansuivansu/exchange-controller/internal/planner"
 )
 
 func TestLoadTelegramFromEnv(t *testing.T) {
@@ -57,8 +58,7 @@ func TestTelegramValidation(t *testing.T) {
 }
 
 func TestLoadLiveDataSimulationFromEnv(t *testing.T) {
-	t.Setenv("PLANNER_TAKE_PROFIT", "70000")
-	t.Setenv("PLANNER_STOP_LOSS", "60000")
+	t.Setenv("AVAILABLE_QUOTE_CAPITAL", "1000")
 	t.Setenv("MARKET_WINDOW_SIZE", "42")
 	t.Setenv("MARKET_BASE", "ETH")
 	t.Setenv("MARKET_QUOTE", "USD")
@@ -74,5 +74,9 @@ func TestLoadLiveDataSimulationFromEnv(t *testing.T) {
 		got.DrawdownThreshold.String() != "0.03" || got.RecoveryThreshold.String() != "0.015" ||
 		got.PollInterval != 2*time.Second || got.CandleTimeframe != "M1" {
 		t.Fatalf("unexpected live-data configuration: %+v", got)
+	}
+	if got.Capital.QuoteAsset != "USD" || got.Capital.AvailableQuote.String() != "1000" ||
+		got.Planner.EntryMode != planner.EntryRecoveryClose || got.Planner.TakeProfitMode != planner.TakeProfitPreviousHigh {
+		t.Fatalf("unexpected planner/capital configuration: %+v %+v", got.Planner, got.Capital)
 	}
 }

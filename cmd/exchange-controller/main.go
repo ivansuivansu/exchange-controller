@@ -75,10 +75,8 @@ func runLiveDataSimulation() error {
 	log.Printf("SIMULATION ONLY: observing Crypto.com %s public data; no live orders can be submitted", settings.Market.Instrument)
 	runner := application.Runner{
 		Market: source, Signals: detector, Ideas: idea.RecoveryBuilder{},
-		Planner: planner.SimplePlanner{Config: planner.SimpleConfig{
-			Quantity: settings.Quantity, TakeProfit: settings.TakeProfit, StopLoss: settings.StopLoss,
-			ApprovalTTL: settings.ApprovalTTL, EntryTTL: settings.EntryTTL,
-		}}, Approver: approver, Execution: controller, Logger: log.Default(),
+		Planner: planner.PlannerV1{Config: settings.Planner}, Capital: settings.Capital,
+		Approver: approver, Execution: controller, Logger: log.Default(),
 	}
 	runnerErrors := make(chan error, 1)
 	go func() { runnerErrors <- runner.Run(ctx) }()
@@ -116,7 +114,7 @@ func runDemo() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	plans, err := (planner.FakePlanner{}).Plan(ctx, tradeIdea)
+	plans, err := (planner.FakePlanner{}).Plan(ctx, tradeIdea, domain.CapitalSnapshot{})
 	if err != nil {
 		log.Fatal(err)
 	}

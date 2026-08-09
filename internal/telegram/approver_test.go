@@ -64,6 +64,8 @@ func testPlan(t *testing.T, now time.Time) domain.TradePlan {
 		EntryPrice: domain.MustDecimal("64100"), Quantity: domain.MustDecimal("0.01"),
 		TakeProfit: domain.MustDecimal("65800"), StopLoss: domain.MustDecimal("63500"),
 		ApproveBy: now.Add(time.Minute), EntryTTL: 25 * time.Minute,
+		QuoteNotional: domain.MustDecimal("641"), RiskReward: domain.MustDecimal("2"),
+		GrossUpsidePercent: domain.MustDecimal("0.02"), DownsidePercent: domain.MustDecimal("0.01"), PlannerName: "test",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -319,7 +321,11 @@ func TestRenderPlanAndCallbackRoundTrip(t *testing.T) {
 	now := time.Now()
 	plan := testPlan(t, now)
 	message := telegram.RenderPlan(plan)
-	for _, value := range []string{"BTC_USD", "64100", "0.01", "65800", "63500", plan.ID(), "v1", "25m0s"} {
+	for _, value := range []string{
+		"SIMULATION", "BTC_USD", "Planner: test", "64100", "Planned notional: 641 USD",
+		"0.01 BTC", "65800", "63500", "Gross upside: 2%", "Downside: 1%",
+		"Risk/reward: 2", plan.ID(), "v1", "25m0s",
+	} {
 		if !strings.Contains(message.Text, value) {
 			t.Errorf("rendered plan lacks %q", value)
 		}

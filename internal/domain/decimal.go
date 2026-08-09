@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/big"
 	"strconv"
 	"strings"
 )
@@ -15,6 +16,16 @@ const decimalScale int64 = 100_000_000
 type Decimal struct {
 	units int64
 }
+
+type RoundingMode uint8
+
+const (
+	RoundTowardZero RoundingMode = iota
+	RoundAwayFromZero
+)
+
+var ErrDecimalOverflow = errors.New("decimal overflow")
+var ErrDecimalDivisionByZero = errors.New("decimal division by zero")
 
 // DecimalFromUnits constructs a Decimal from its scaled internal units.
 // One whole unit is represented by 100,000,000 internal units.
@@ -87,6 +98,53 @@ func (d Decimal) IsZero() bool             { return d.units == 0 }
 func (d Decimal) IsPositive() bool         { return d.units > 0 }
 func (d Decimal) Equal(other Decimal) bool { return d.units == other.units }
 func (d Decimal) Less(other Decimal) bool  { return d.units < other.units }
+
+func (d Decimal) Add(other Decimal) (Decimal, error) {
+	return decimalFromBig(new(big.Int).Add(big.NewInt(d.units), big.NewInt(other.units)))
+}
+
+func (d Decimal) Sub(other Decimal) (Decimal, error) {
+	return decimalFromBig(new(big.Int).Sub(big.NewInt(d.units), big.NewInt(other.units)))
+}
+
+// Mul preserves Decimal's eight-digit scale and applies the requested rounding
+// when the exact product has more than eight fractional digits.
+func (d Decimal) Mul(other Decimal, rounding RoundingMode) (Decimal, error) {
+	product := new(big.Int).Mul(big.NewInt(d.units), big.NewInt(other.units))
+	return scaledQuotient(product, big.NewInt(decimalScale), rounding)
+}
+
+// Div preserves Decimal's eight-digit scale. RoundTowardZero is round-down for
+// positive values and is used for BUY quantity sizing.
+func (d Decimal) Div(other Decimal, rounding RoundingMode) (Decimal, error) {
+	if other.IsZero() {
+		return Decimal{}, ErrDecimalDivisionByZero
+	}
+	numerator := new(big.Int).Mul(big.NewInt(d.units), big.NewInt(decimalScale))
+	return scaledQuotient(numerator, big.NewInt(other.units), rounding)
+}
+
+func scaledQuotient(numerator, denominator *big.Int, rounding RoundingMode) (Decimal, error) {
+	quotient, remainder := new(big.Int), new(big.Int)
+	quotient.QuoRem(numerator, denominator, remainder)
+	if rounding == RoundAwayFromZero && remainder.Sign() != 0 {
+		if numerator.Sign()*denominator.Sign() >= 0 {
+			quotient.Add(quotient, big.NewInt(1))
+		} else {
+			quotient.Sub(quotient, big.NewInt(1))
+		}
+	} else if rounding != RoundTowardZero {
+		return Decimal{}, errors.New("unsupported decimal rounding mode")
+	}
+	return decimalFromBig(quotient)
+}
+
+func decimalFromBig(value *big.Int) (Decimal, error) {
+	if !value.IsInt64() {
+		return Decimal{}, ErrDecimalOverflow
+	}
+	return DecimalFromUnits(value.Int64()), nil
+}
 
 func (d Decimal) String() string {
 	sign := ""

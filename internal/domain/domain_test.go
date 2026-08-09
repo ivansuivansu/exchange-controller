@@ -14,6 +14,8 @@ func planParams() domain.TradePlanParams {
 		EntryPrice: domain.MustDecimal("64100"), Quantity: domain.MustDecimal("0.01"),
 		TakeProfit: domain.MustDecimal("65800"), StopLoss: domain.MustDecimal("63500"),
 		ApproveBy: time.Unix(1000, 0), EntryTTL: 15 * time.Minute,
+		QuoteNotional: domain.MustDecimal("641"), RiskReward: domain.MustDecimal("2"),
+		GrossUpsidePercent: domain.MustDecimal("0.02"), DownsidePercent: domain.MustDecimal("0.01"), PlannerName: "test",
 	}
 }
 

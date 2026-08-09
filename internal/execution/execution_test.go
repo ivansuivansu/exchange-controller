@@ -23,6 +23,8 @@ func fakePlan(t *testing.T) domain.TradePlan {
 		EntryPrice: domain.MustDecimal("10"), Quantity: domain.MustDecimal("1"),
 		TakeProfit: domain.MustDecimal("11"), StopLoss: domain.MustDecimal("9"),
 		ApproveBy: time.Now().Add(time.Minute), EntryTTL: time.Minute,
+		QuoteNotional: domain.MustDecimal("10"), RiskReward: domain.MustDecimal("1"),
+		GrossUpsidePercent: domain.MustDecimal("0.1"), DownsidePercent: domain.MustDecimal("0.1"), PlannerName: "test",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -139,7 +141,7 @@ func TestFakePipelineHappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plans, err := (planner.FakePlanner{Now: func() time.Time { return now }}).Plan(ctx, tradeIdea)
+	plans, err := (planner.FakePlanner{Now: func() time.Time { return now }}).Plan(ctx, tradeIdea, domain.CapitalSnapshot{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -68,6 +68,11 @@ func TestDrawdownUsesHighAndTracksLocalLowThenRecovers(t *testing.T) {
 	if result.Price.String() != "92.4" || d.State() != signal.StateSignalEmitted {
 		t.Fatalf("unexpected signal/state: %+v %s", result, d.State())
 	}
+	if result.Recovery == nil || result.Recovery.RecentHigh.String() != "100" || result.Recovery.LocalLow.String() != "88" ||
+		result.Recovery.RecoveryPrice.String() != "92.4" || result.Recovery.DrawdownPercent.String() != "0.12" ||
+		result.Recovery.RecoveryPercent.String() != "0.05" {
+		t.Fatalf("structured recovery signal = %+v", result.Recovery)
+	}
 }
 
 func TestDuplicateIncompleteAndCooldown(t *testing.T) {

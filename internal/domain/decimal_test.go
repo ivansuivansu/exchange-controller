@@ -1,6 +1,7 @@
 package domain_test
 
 import (
+	"errors"
 	"math"
 	"testing"
 
@@ -69,5 +70,29 @@ func TestDecimalStringFullInt64Range(t *testing.T) {
 	}
 	if got := domain.DecimalFromUnits(math.MaxInt64).String(); got != "92233720368.54775807" {
 		t.Fatalf("MaxInt64 String() = %q", got)
+	}
+}
+
+func TestDecimalArithmeticAndRounding(t *testing.T) {
+	product, err := domain.MustDecimal("1.23456789").Mul(domain.MustDecimal("3"), domain.RoundTowardZero)
+	if err != nil || product.String() != "3.70370367" {
+		t.Fatalf("product = %s, err = %v", product, err)
+	}
+	quotient, err := domain.MustDecimal("1").Div(domain.MustDecimal("3"), domain.RoundTowardZero)
+	if err != nil || quotient.String() != "0.33333333" {
+		t.Fatalf("quotient = %s, err = %v", quotient, err)
+	}
+	roundedUp, err := domain.MustDecimal("1").Div(domain.MustDecimal("3"), domain.RoundAwayFromZero)
+	if err != nil || roundedUp.String() != "0.33333334" {
+		t.Fatalf("rounded quotient = %s, err = %v", roundedUp, err)
+	}
+	if _, err := domain.DecimalFromUnits(math.MaxInt64).Add(domain.DecimalFromUnits(1)); !errors.Is(err, domain.ErrDecimalOverflow) {
+		t.Fatalf("add overflow = %v", err)
+	}
+	if _, err := domain.DecimalFromUnits(math.MaxInt64).Mul(domain.MustDecimal("2"), domain.RoundTowardZero); !errors.Is(err, domain.ErrDecimalOverflow) {
+		t.Fatalf("mul overflow = %v", err)
+	}
+	if _, err := domain.MustDecimal("1").Div(domain.Decimal{}, domain.RoundTowardZero); !errors.Is(err, domain.ErrDecimalDivisionByZero) {
+		t.Fatalf("division error = %v", err)
 	}
 }

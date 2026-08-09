@@ -120,14 +120,34 @@ func (d *DrawdownRecoveryDetector) Detect(ctx context.Context, candle domain.Can
 		d.state = StateRecovering
 		if reached(d.low, candle.Close, d.config.RecoveryThreshold, true) {
 			d.state, d.emittedAt = StateSignalEmitted, candle.CloseTime
+			drawdownPercent, err := percentBetween(d.high, d.low, d.high)
+			if err != nil {
+				return domain.Signal{}, err
+			}
+			recoveryPercent, err := percentBetween(candle.Close, d.low, d.low)
+			if err != nil {
+				return domain.Signal{}, err
+			}
 			return domain.Signal{
 				ID: fmt.Sprintf("drawdown-recovery-%d", candle.OpenTime.UnixNano()), Market: candle.Market,
 				ObservedAt: candle.CloseTime, Price: candle.Close,
 				Description: fmt.Sprintf("recovery from local low %s after drawdown from %s", d.low, d.high),
+				Recovery: &domain.RecoverySignal{
+					RecentHigh: d.high, LocalLow: d.low, RecoveryPrice: candle.Close,
+					DrawdownPercent: drawdownPercent, RecoveryPercent: recoveryPercent,
+				},
 			}, nil
 		}
 	}
 	return domain.Signal{}, ErrNoSignal
+}
+
+func percentBetween(higher, lower, base domain.Decimal) (domain.Decimal, error) {
+	delta, err := higher.Sub(lower)
+	if err != nil {
+		return domain.Decimal{}, err
+	}
+	return delta.Div(base, domain.RoundTowardZero)
 }
 
 func windowHigh(candles []domain.Candle) domain.Decimal {

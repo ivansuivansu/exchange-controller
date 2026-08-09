@@ -46,6 +46,15 @@ type Signal struct {
 	ObservedAt  time.Time
 	Price       Decimal
 	Description string
+	Recovery    *RecoverySignal
+}
+
+type RecoverySignal struct {
+	RecentHigh      Decimal
+	LocalLow        Decimal
+	RecoveryPrice   Decimal
+	DrawdownPercent Decimal
+	RecoveryPercent Decimal
 }
 
 type TradeIdea struct {
@@ -55,6 +64,13 @@ type TradeIdea struct {
 	ReferencePrice Decimal
 	CreatedAt      time.Time
 	Description    string
+	Recovery       *RecoverySignal
+}
+
+type CapitalSnapshot struct {
+	QuoteAsset     Asset
+	AvailableQuote Decimal
+	AsOf           time.Time
 }
 
 type TradePlanLifecycleStatus string
@@ -76,16 +92,21 @@ type TradePlanLifecycle struct {
 }
 
 type TradePlanParams struct {
-	ID         string
-	Version    uint64
-	IdeaID     string
-	Market     Market
-	EntryPrice Decimal
-	Quantity   Decimal
-	TakeProfit Decimal
-	StopLoss   Decimal
-	ApproveBy  time.Time
-	EntryTTL   time.Duration
+	ID                 string
+	Version            uint64
+	IdeaID             string
+	Market             Market
+	EntryPrice         Decimal
+	Quantity           Decimal
+	TakeProfit         Decimal
+	StopLoss           Decimal
+	ApproveBy          time.Time
+	EntryTTL           time.Duration
+	QuoteNotional      Decimal
+	RiskReward         Decimal
+	GrossUpsidePercent Decimal
+	DownsidePercent    Decimal
+	PlannerName        string
 }
 
 // TradePlan has no exported fields so approved intent cannot be mutated in
@@ -106,19 +127,28 @@ func NewTradePlan(params TradePlanParams) (TradePlan, error) {
 	if params.ApproveBy.IsZero() || params.EntryTTL <= 0 {
 		return TradePlan{}, errors.New("approve-by and a positive entry TTL are required")
 	}
+	if !params.QuoteNotional.IsPositive() || !params.RiskReward.IsPositive() ||
+		!params.GrossUpsidePercent.IsPositive() || !params.DownsidePercent.IsPositive() || params.PlannerName == "" {
+		return TradePlan{}, errors.New("notional, projections, risk/reward, and planner name are required")
+	}
 	return TradePlan{params: params}, nil
 }
 
-func (p TradePlan) ID() string              { return p.params.ID }
-func (p TradePlan) Version() uint64         { return p.params.Version }
-func (p TradePlan) IdeaID() string          { return p.params.IdeaID }
-func (p TradePlan) Market() Market          { return p.params.Market }
-func (p TradePlan) EntryPrice() Decimal     { return p.params.EntryPrice }
-func (p TradePlan) Quantity() Decimal       { return p.params.Quantity }
-func (p TradePlan) TakeProfit() Decimal     { return p.params.TakeProfit }
-func (p TradePlan) StopLoss() Decimal       { return p.params.StopLoss }
-func (p TradePlan) ApproveBy() time.Time    { return p.params.ApproveBy }
-func (p TradePlan) EntryTTL() time.Duration { return p.params.EntryTTL }
+func (p TradePlan) ID() string                  { return p.params.ID }
+func (p TradePlan) Version() uint64             { return p.params.Version }
+func (p TradePlan) IdeaID() string              { return p.params.IdeaID }
+func (p TradePlan) Market() Market              { return p.params.Market }
+func (p TradePlan) EntryPrice() Decimal         { return p.params.EntryPrice }
+func (p TradePlan) Quantity() Decimal           { return p.params.Quantity }
+func (p TradePlan) TakeProfit() Decimal         { return p.params.TakeProfit }
+func (p TradePlan) StopLoss() Decimal           { return p.params.StopLoss }
+func (p TradePlan) ApproveBy() time.Time        { return p.params.ApproveBy }
+func (p TradePlan) EntryTTL() time.Duration     { return p.params.EntryTTL }
+func (p TradePlan) QuoteNotional() Decimal      { return p.params.QuoteNotional }
+func (p TradePlan) RiskReward() Decimal         { return p.params.RiskReward }
+func (p TradePlan) GrossUpsidePercent() Decimal { return p.params.GrossUpsidePercent }
+func (p TradePlan) DownsidePercent() Decimal    { return p.params.DownsidePercent }
+func (p TradePlan) PlannerName() string         { return p.params.PlannerName }
 func (p TradePlan) EntryExpiresAt(submittedAt time.Time) time.Time {
 	return submittedAt.Add(p.EntryTTL())
 }

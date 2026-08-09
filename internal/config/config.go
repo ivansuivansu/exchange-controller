@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ivansuivansu/exchange-controller/internal/domain"
+	"github.com/ivansuivansu/exchange-controller/internal/planner"
 )
 
 type Mode string
@@ -57,15 +58,27 @@ func LoadLiveDataSimulationFromEnv() (LiveDataSimulation, error) {
 	if err != nil {
 		return LiveDataSimulation{}, err
 	}
-	quantity, err := envDecimal("PLANNER_QUANTITY", "0.001")
+	entryOffset, err := envDecimal("PLANNER_ENTRY_OFFSET", "0")
 	if err != nil {
 		return LiveDataSimulation{}, err
 	}
-	tp, err := requiredDecimal("PLANNER_TAKE_PROFIT")
+	retracement, err := envDecimal("PLANNER_RETRACEMENT_TARGET", "0.5")
 	if err != nil {
 		return LiveDataSimulation{}, err
 	}
-	sl, err := requiredDecimal("PLANNER_STOP_LOSS")
+	slOffset, err := envDecimal("PLANNER_STOP_LOSS_OFFSET", "0.01")
+	if err != nil {
+		return LiveDataSimulation{}, err
+	}
+	minimumRR, err := envDecimal("PLANNER_MINIMUM_RISK_REWARD", "1.5")
+	if err != nil {
+		return LiveDataSimulation{}, err
+	}
+	reserve, err := envDecimal("TECHNICAL_RESERVE_QUOTE", "0")
+	if err != nil {
+		return LiveDataSimulation{}, err
+	}
+	available, err := requiredDecimal("AVAILABLE_QUOTE_CAPITAL")
 	if err != nil {
 		return LiveDataSimulation{}, err
 	}
@@ -102,8 +115,14 @@ func LoadLiveDataSimulationFromEnv() (LiveDataSimulation, error) {
 		},
 		WindowSize: window, DrawdownThreshold: drawdown, RecoveryThreshold: recovery,
 		SignalCooldown: cooldown, PollInterval: poll, CandleTimeframe: timeframe, HTTPTimeout: timeout,
-		MaxAttempts: attempts, RetryBackoff: backoff, Quantity: quantity,
-		TakeProfit: tp, StopLoss: sl, ApprovalTTL: approvalTTL, EntryTTL: entryTTL,
+		MaxAttempts: attempts, RetryBackoff: backoff,
+		Capital: domain.CapitalSnapshot{QuoteAsset: domain.Asset(quote), AvailableQuote: available, AsOf: time.Now().UTC()},
+		Planner: planner.V1Config{
+			Name: "planner-v1", EntryMode: planner.EntryMode(envString("PLANNER_ENTRY_MODE", string(planner.EntryRecoveryClose))),
+			EntryOffset: entryOffset, TakeProfitMode: planner.TakeProfitMode(envString("PLANNER_TP_MODE", string(planner.TakeProfitPreviousHigh))),
+			RetracementTarget: retracement, StopLossOffset: slOffset, MinimumRiskReward: minimumRR,
+			ApprovalTTL: approvalTTL, EntryTTL: entryTTL, FixedQuoteReserve: reserve,
+		},
 	}, nil
 }
 
@@ -151,6 +170,14 @@ func requiredDecimal(name string) (domain.Decimal, error) {
 	return envDecimal(name, "")
 }
 
+func envString(name, fallback string) string {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback
+	}
+	return value
+}
+
 type LiveDataSimulation struct {
 	Market            domain.Market
 	WindowSize        int
@@ -162,11 +189,8 @@ type LiveDataSimulation struct {
 	HTTPTimeout       time.Duration
 	MaxAttempts       int
 	RetryBackoff      time.Duration
-	Quantity          domain.Decimal
-	TakeProfit        domain.Decimal
-	StopLoss          domain.Decimal
-	ApprovalTTL       time.Duration
-	EntryTTL          time.Duration
+	Capital           domain.CapitalSnapshot
+	Planner           planner.V1Config
 }
 
 type Telegram struct {

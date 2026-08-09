@@ -40,10 +40,14 @@ func TestRealSignalToTelegramApprovalToSimulatedExecution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plans, err := (planner.SimplePlanner{Config: planner.SimpleConfig{
-		Quantity: domain.MustDecimal("0.1"), TakeProfit: domain.MustDecimal("110"),
-		StopLoss: domain.MustDecimal("80"), ApprovalTTL: time.Minute, EntryTTL: time.Minute,
-	}}).Plan(ctx, tradeIdea)
+	plans, err := (planner.PlannerV1{Config: planner.V1Config{
+		Name: "pipeline-v1", EntryMode: planner.EntryRecoveryClose,
+		TakeProfitMode: planner.TakeProfitPreviousHigh, StopLossOffset: domain.MustDecimal("0.01"),
+		MinimumRiskReward: domain.MustDecimal("0.5"), ApprovalTTL: time.Minute, EntryTTL: time.Minute,
+		FixedQuoteReserve: domain.MustDecimal("10"),
+	}}).Plan(ctx, tradeIdea, domain.CapitalSnapshot{
+		QuoteAsset: "USD", AvailableQuote: domain.MustDecimal("1000"), AsOf: now,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
