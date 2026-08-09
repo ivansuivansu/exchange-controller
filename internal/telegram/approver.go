@@ -20,6 +20,7 @@ var (
 	ErrEditRequired       = errors.New("material edits are required")
 	ErrPlanEdited         = errors.New("trade plan was replaced by an edited version")
 	ErrUnsupportedCommand = errors.New("unsupported command")
+	ErrPendingPlan        = errors.New("another trade plan is already pending")
 )
 
 type decisionResult struct {
@@ -67,13 +68,18 @@ func (a *Approver) SetClock(now func() time.Time) { a.now = now }
 
 func recordKey(id string, version uint64) string { return fmt.Sprintf("%s\x00%d", id, version) }
 
-// Present registers and sends a plan without waiting for its callback.
+// Present registers and sends a plan without waiting for its callback. The MVP
+// intentionally permits only one pending TradePlan at a time.
 func (a *Approver) Present(ctx context.Context, plan domain.TradePlan) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	a.mu.Lock()
 	key := recordKey(plan.ID(), plan.Version())
+	if a.pendingKey != "" {
+		a.mu.Unlock()
+		return ErrPendingPlan
+	}
 	if _, exists := a.records[key]; exists {
 		a.mu.Unlock()
 		return ErrAlreadyDecided
@@ -128,22 +134,26 @@ func (a *Approver) HandleCallback(ctx context.Context, callback Callback) (Callb
 	}
 
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	latest, exists := a.latest[planID]
 	if !exists {
+		a.mu.Unlock()
 		return CallbackResult{}, ErrUnknownPlan
 	}
 	if version != latest {
+		a.mu.Unlock()
 		return CallbackResult{}, ErrStaleVersion
 	}
 	record, exists := a.records[recordKey(planID, version)]
 	if !exists {
+		a.mu.Unlock()
 		return CallbackResult{}, ErrUnknownPlan
 	}
 	if !a.now().Before(record.plan.ApproveBy()) {
+		a.mu.Unlock()
 		return CallbackResult{}, ErrExpiredPlan
 	}
 	if record.decided {
+		a.mu.Unlock()
 		return CallbackResult{}, ErrAlreadyDecided
 	}
 
@@ -161,14 +171,25 @@ func (a *Approver) HandleCallback(ctx context.Context, callback Callback) (Callb
 			a.pendingKey = ""
 		}
 		record.waiter <- decisionResult{approval: result}
+		a.mu.Unlock()
 		return CallbackResult{Approval: &result}, nil
 	case ActionEdit:
 		if callback.Edits == nil {
+			a.mu.Unlock()
 			return CallbackResult{}, ErrEditRequired
 		}
 		edited, editErr := record.plan.Edit(*callback.Edits)
 		if editErr != nil {
+			a.mu.Unlock()
 			return CallbackResult{}, editErr
+		}
+		// Send before committing the transition: a failed send must not leave an
+		// invisible new version registered as the pending plan.
+		if a.messenger != nil {
+			if sendErr := a.messenger.SendPlan(ctx, a.config.SendChatID, RenderPlan(edited)); sendErr != nil {
+				a.mu.Unlock()
+				return CallbackResult{}, sendErr
+			}
 		}
 		record.decided = true
 		record.waiter <- decisionResult{err: ErrPlanEdited}
@@ -177,8 +198,10 @@ func (a *Approver) HandleCallback(ctx context.Context, callback Callback) (Callb
 		}
 		a.latest[edited.ID()] = edited.Version()
 		a.pendingKey = recordKey(edited.ID(), edited.Version())
+		a.mu.Unlock()
 		return CallbackResult{EditedPlan: &edited}, nil
 	default:
+		a.mu.Unlock()
 		panic("DecodeCallback accepted unsupported action")
 	}
 }

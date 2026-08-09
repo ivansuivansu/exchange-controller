@@ -43,10 +43,37 @@ func LoadTelegramFromEnv() (Telegram, error) {
 	if err != nil {
 		return Telegram{}, fmt.Errorf("TELEGRAM_SEND_CHAT_ID: %w", err)
 	}
-	return Telegram{
+	config := Telegram{
 		Token: os.Getenv("TELEGRAM_BOT_TOKEN"), SendChatID: sendChatID,
 		AllowedUserIDs: users, AllowedChatIDs: chats,
-	}, nil
+	}
+	if err := config.Validate(); err != nil {
+		return Telegram{}, err
+	}
+	return config, nil
+}
+
+// Validate checks configuration required when Telegram operation is enabled.
+func (c Telegram) Validate() error {
+	if strings.TrimSpace(c.Token) == "" {
+		return fmt.Errorf("TELEGRAM_BOT_TOKEN must not be empty")
+	}
+	if c.SendChatID == 0 {
+		return fmt.Errorf("TELEGRAM_SEND_CHAT_ID must be configured")
+	}
+	if !hasNonZeroID(c.AllowedUserIDs) || !hasNonZeroID(c.AllowedChatIDs) {
+		return fmt.Errorf("Telegram authorization requires at least one non-zero user ID and chat ID")
+	}
+	return nil
+}
+
+func hasNonZeroID(ids []int64) bool {
+	for _, id := range ids {
+		if id != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func parseIDs(value string) ([]int64, error) {

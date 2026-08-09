@@ -204,11 +204,13 @@ func TestApprovalDoesNotMutateTradePlan(t *testing.T) {
 
 func TestEditCreatesNewVersionWithoutMutatingOriginal(t *testing.T) {
 	now := time.Now()
-	a := newApprover(now, nil)
+	messenger := newFakeMessenger()
+	a := newApprover(now, messenger)
 	plan := testPlan(t, now)
 	if err := a.Present(context.Background(), plan); err != nil {
 		t.Fatal(err)
 	}
+	<-messenger.plans
 	entry := domain.MustDecimal("64000")
 	request := callback(plan, telegram.ActionEdit)
 	request.Edits = &domain.TradePlanEdits{EntryPrice: &entry}
@@ -218,6 +220,10 @@ func TestEditCreatesNewVersionWithoutMutatingOriginal(t *testing.T) {
 	}
 	if result.EditedPlan == nil || result.EditedPlan.Version() != plan.Version()+1 {
 		t.Fatalf("unexpected edited plan: %+v", result.EditedPlan)
+	}
+	editedMessage := <-messenger.plans
+	if !strings.Contains(editedMessage.Text, "v2") || len(editedMessage.Buttons) != 3 {
+		t.Fatalf("edited plan was not presented for fresh approval: %+v", editedMessage)
 	}
 	if !result.EditedPlan.EntryPrice().Equal(entry) {
 		t.Fatal("entry edit was not applied")
@@ -230,6 +236,26 @@ func TestEditCreatesNewVersionWithoutMutatingOriginal(t *testing.T) {
 	}
 	if _, err := a.HandleCallback(context.Background(), callback(plan, telegram.ActionApprove)); !errors.Is(err, telegram.ErrStaleVersion) {
 		t.Fatalf("old callback error = %v, want ErrStaleVersion", err)
+	}
+}
+
+func TestOnlyOnePendingPlanAtATime(t *testing.T) {
+	now := time.Now()
+	a := newApprover(now, nil)
+	first := testPlan(t, now)
+	if err := a.Present(context.Background(), first); err != nil {
+		t.Fatal(err)
+	}
+	entry := domain.MustDecimal("64000")
+	second, err := first.Edit(domain.TradePlanEdits{EntryPrice: &entry})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Present(context.Background(), second); !errors.Is(err, telegram.ErrPendingPlan) {
+		t.Fatalf("second pending plan error = %v, want ErrPendingPlan", err)
+	}
+	if pending, ok := a.PendingPlan(); !ok || !pending.IsVersion(first.ID(), first.Version()) {
+		t.Fatal("first plan was not preserved as the sole pending plan")
 	}
 }
 
