@@ -127,13 +127,17 @@ func (d Decimal) Div(other Decimal, rounding RoundingMode) (Decimal, error) {
 func scaledQuotient(numerator, denominator *big.Int, rounding RoundingMode) (Decimal, error) {
 	quotient, remainder := new(big.Int), new(big.Int)
 	quotient.QuoRem(numerator, denominator, remainder)
-	if rounding == RoundAwayFromZero && remainder.Sign() != 0 {
-		if numerator.Sign()*denominator.Sign() >= 0 {
-			quotient.Add(quotient, big.NewInt(1))
-		} else {
-			quotient.Sub(quotient, big.NewInt(1))
+	switch rounding {
+	case RoundTowardZero:
+	case RoundAwayFromZero:
+		if remainder.Sign() != 0 {
+			if numerator.Sign()*denominator.Sign() >= 0 {
+				quotient.Add(quotient, big.NewInt(1))
+			} else {
+				quotient.Sub(quotient, big.NewInt(1))
+			}
 		}
-	} else if rounding != RoundTowardZero {
+	default:
 		return Decimal{}, errors.New("unsupported decimal rounding mode")
 	}
 	return decimalFromBig(quotient)

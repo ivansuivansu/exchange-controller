@@ -25,6 +25,33 @@ type Config struct {
 	Telegram Telegram
 }
 
+type Backtest struct {
+	CandleCount     int
+	FeeRate         domain.Decimal
+	SlippageRate    domain.Decimal
+	AmbiguityPolicy string
+}
+
+func LoadBacktestFromEnv() (Backtest, error) {
+	count, err := envInt("BACKTEST_CANDLE_COUNT", 300)
+	if err != nil {
+		return Backtest{}, err
+	}
+	fee, err := envDecimal("BACKTEST_FEE_RATE", "0")
+	if err != nil {
+		return Backtest{}, err
+	}
+	slippage, err := envDecimal("BACKTEST_SLIPPAGE_RATE", "0")
+	if err != nil {
+		return Backtest{}, err
+	}
+	policy := envString("BACKTEST_AMBIGUITY_POLICY", "CONSERVATIVE")
+	if count <= 0 || fee.Less(domain.Decimal{}) || slippage.Less(domain.Decimal{}) {
+		return Backtest{}, fmt.Errorf("invalid backtest count, fee, or slippage")
+	}
+	return Backtest{CandleCount: count, FeeRate: fee, SlippageRate: slippage, AmbiguityPolicy: policy}, nil
+}
+
 func LoadLiveDataSimulationFromEnv() (LiveDataSimulation, error) {
 	base := strings.TrimSpace(os.Getenv("MARKET_BASE"))
 	if base == "" {

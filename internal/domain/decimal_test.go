@@ -86,6 +86,10 @@ func TestDecimalArithmeticAndRounding(t *testing.T) {
 	if err != nil || roundedUp.String() != "0.33333334" {
 		t.Fatalf("rounded quotient = %s, err = %v", roundedUp, err)
 	}
+	exact, err := domain.MustDecimal("10").Mul(domain.MustDecimal("0.01"), domain.RoundAwayFromZero)
+	if err != nil || exact.String() != "0.1" {
+		t.Fatalf("exact rounded product = %s, err = %v", exact, err)
+	}
 	if _, err := domain.DecimalFromUnits(math.MaxInt64).Add(domain.DecimalFromUnits(1)); !errors.Is(err, domain.ErrDecimalOverflow) {
 		t.Fatalf("add overflow = %v", err)
 	}

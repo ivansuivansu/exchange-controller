@@ -80,3 +80,17 @@ func TestLoadLiveDataSimulationFromEnv(t *testing.T) {
 		t.Fatalf("unexpected planner/capital configuration: %+v %+v", got.Planner, got.Capital)
 	}
 }
+
+func TestLoadBacktestFromEnv(t *testing.T) {
+	t.Setenv("BACKTEST_CANDLE_COUNT", "50")
+	t.Setenv("BACKTEST_FEE_RATE", "0.001")
+	t.Setenv("BACKTEST_SLIPPAGE_RATE", "0.002")
+	t.Setenv("BACKTEST_AMBIGUITY_POLICY", "OPTIMISTIC")
+	got, err := config.LoadBacktestFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.CandleCount != 50 || got.FeeRate.String() != "0.001" || got.SlippageRate.String() != "0.002" || got.AmbiguityPolicy != "OPTIMISTIC" {
+		t.Fatalf("unexpected backtest config: %+v", got)
+	}
+}

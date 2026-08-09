@@ -12,6 +12,7 @@ import (
 
 	"github.com/ivansuivansu/exchange-controller/internal/application"
 	"github.com/ivansuivansu/exchange-controller/internal/approval"
+	"github.com/ivansuivansu/exchange-controller/internal/backtest"
 	"github.com/ivansuivansu/exchange-controller/internal/config"
 	"github.com/ivansuivansu/exchange-controller/internal/domain"
 	"github.com/ivansuivansu/exchange-controller/internal/exchange/cryptocom"
@@ -24,6 +25,12 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "backtest" {
+		if err := runBacktest(); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	if os.Getenv("APP_MODE") == "live-data-simulation" {
 		if err := runLiveDataSimulation(); err != nil {
 			log.Fatal(err)
@@ -31,6 +38,78 @@ func main() {
 		return
 	}
 	runDemo()
+}
+
+func runBacktest() error {
+	settings, err := config.LoadLiveDataSimulationFromEnv()
+	if err != nil {
+		return err
+	}
+	backtestSettings, err := config.LoadBacktestFromEnv()
+	if err != nil {
+		return err
+	}
+	timeframe, err := cryptocom.TimeframeDuration(settings.CandleTimeframe)
+	if err != nil {
+		return err
+	}
+	ctx, stop := signalNotifyContext()
+	defer stop()
+	source, err := cryptocom.NewSource(cryptocom.Config{
+		HTTPClient: &http.Client{Timeout: settings.HTTPTimeout}, Market: settings.Market,
+		MaxAttempts: settings.MaxAttempts, RetryBackoff: settings.RetryBackoff,
+		CandleTimeframe: settings.CandleTimeframe, CandleCount: backtestSettings.CandleCount,
+	})
+	if err != nil {
+		return err
+	}
+	candles, err := source.LoadCompletedCandles(ctx)
+	if err != nil {
+		return err
+	}
+	history, err := backtest.NewInMemoryCandleSource(candles, settings.Market, timeframe)
+	if err != nil {
+		return err
+	}
+	detector, err := signals.NewDrawdownRecoveryDetector(signals.DrawdownRecoveryConfig{
+		WindowSize: settings.WindowSize, DrawdownThreshold: settings.DrawdownThreshold,
+		RecoveryThreshold: settings.RecoveryThreshold, Cooldown: settings.SignalCooldown,
+	})
+	if err != nil {
+		return err
+	}
+	executionEngine, err := backtest.NewBacktestExecutionEngine(backtest.SimulationConfig{
+		Market: settings.Market, Timeframe: timeframe, StartingCapital: settings.Capital.AvailableQuote,
+		FeeRate: backtestSettings.FeeRate, SlippageRate: backtestSettings.SlippageRate,
+		AmbiguityPolicy: backtest.AmbiguityPolicy(backtestSettings.AmbiguityPolicy),
+	})
+	if err != nil {
+		return err
+	}
+	report, err := (backtest.Backtester{
+		Source: history, Detector: detector, Ideas: idea.RecoveryBuilder{},
+		Planner: planner.PlannerV1{Config: settings.Planner}, Execution: executionEngine,
+	}).Run(ctx)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("BACKTEST SIMULATION — %s %s\n", settings.Market.Instrument, settings.CandleTimeframe)
+	fmt.Printf("Capital: %s → %s %s | Net: %s | Return: %s%%\n",
+		report.StartingCapital, report.EndingCapital, settings.Market.Quote, report.NetProfitLoss, percent(report.TotalReturnPercent))
+	fmt.Printf("Signals: %d | Plans: %d | Rejections: %d | Filled: %d | Expired: %d\n",
+		report.TotalSignals, report.PlansProduced, report.PlannerRejections, report.EntriesFilled, report.EntriesExpired)
+	fmt.Printf("Wins/Losses: %d/%d | Win rate: %s%% | Profit factor: %s | Max drawdown: %s%% | Fees: %s\n",
+		report.WinningTrades, report.LosingTrades, percent(report.WinRate), report.ProfitFactor,
+		percent(report.MaximumDrawdown), report.TotalFeesPaid)
+	return nil
+}
+
+func percent(value domain.Decimal) string {
+	result, err := value.Mul(domain.MustDecimal("100"), domain.RoundTowardZero)
+	if err != nil {
+		return value.String()
+	}
+	return result.String()
 }
 
 func runLiveDataSimulation() error {

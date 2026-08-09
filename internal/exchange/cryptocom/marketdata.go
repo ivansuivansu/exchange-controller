@@ -76,7 +76,7 @@ func NewSource(config Config) (*Source, error) {
 	if config.CandleTimeframe == "" {
 		config.CandleTimeframe = "M1"
 	}
-	candleDuration, err := timeframeDuration(config.CandleTimeframe)
+	candleDuration, err := TimeframeDuration(config.CandleTimeframe)
 	if err != nil {
 		return nil, err
 	}
@@ -115,7 +115,7 @@ func (s *Source) Next(ctx context.Context) (domain.MarketEvent, error) {
 	return domain.MarketEvent{}, fmt.Errorf("Crypto.com market data after %d attempts: %w", s.maxAttempts, lastErr)
 }
 
-func timeframeDuration(timeframe string) (time.Duration, error) {
+func TimeframeDuration(timeframe string) (time.Duration, error) {
 	durations := map[string]time.Duration{
 		"M1": time.Minute, "M5": 5 * time.Minute, "M15": 15 * time.Minute,
 		"M30": 30 * time.Minute, "H1": time.Hour, "H2": 2 * time.Hour,
@@ -126,6 +126,37 @@ func timeframeDuration(timeframe string) (time.Duration, error) {
 		return 0, fmt.Errorf("unsupported Crypto.com candle timeframe %q", timeframe)
 	}
 	return duration, nil
+}
+
+// LoadCompletedCandles downloads a historical batch. Replay state and
+// iteration are intentionally owned by the backtest package, not this loader.
+func (s *Source) LoadCompletedCandles(ctx context.Context) ([]domain.Candle, error) {
+	var lastErr error
+	for attempt := 0; attempt < s.maxAttempts; attempt++ {
+		candles, err := s.fetchCandles(ctx)
+		if err == nil {
+			completed := make([]domain.Candle, 0, len(candles))
+			var last time.Time
+			for _, candle := range candles {
+				if candle.CloseTime.After(s.now()) || !candle.OpenTime.After(last) {
+					continue
+				}
+				completed = append(completed, candle)
+				last = candle.OpenTime
+			}
+			if len(completed) > 0 {
+				return completed, nil
+			}
+			err = ErrNoCompletedCandle
+		}
+		lastErr = err
+		if attempt+1 < s.maxAttempts {
+			if err := wait(ctx, s.retryBackoff*time.Duration(attempt+1)); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return nil, fmt.Errorf("Crypto.com historical candles after %d attempts: %w", s.maxAttempts, lastErr)
 }
 
 func (s *Source) NextCandle(ctx context.Context) (domain.Candle, error) {
